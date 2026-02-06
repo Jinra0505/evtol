@@ -1,3 +1,7 @@
+import pytest
+
+pytest.importorskip("gurobipy")
+
 from project.src.data_loader import load_data
 from project.src.mfd import boundary_flows
 from project.src.runner import run_equilibrium

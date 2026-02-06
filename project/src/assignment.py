@@ -22,6 +22,11 @@ def build_incidence(
             station = stop["station"]
             t = stop["t"]
             inc_station[station][it["id"]][t] += 1.0
+        if it.get("mode") == "eVTOL":
+            dep_station = it.get("dep_station")
+            if dep_station is not None:
+                for t in times:
+                    inc_station[dep_station][it["id"]][t] += 1.0
     return inc_road, inc_station
 
 
@@ -35,11 +40,12 @@ def compute_itinerary_costs(
     costs: Dict[str, Dict[int, Dict[str, float]]] = {it["id"]: {} for it in itineraries}
     for it in itineraries:
         flight_time = it.get("flight_time", {})
-        money = it.get("money", 0.0)
+        base_money = it.get("money", 0.0)
         phi_markup = it.get("phi_energy_markup", 1.0)
         dep_station = it.get("dep_station")
         e_per_pax = it.get("e_per_pax", 0.0)
         for t in times:
+            money_t = base_money
             tt = 0.0
             charge_cost = 0.0
             for seg in it.get("road_arcs", []):
@@ -55,10 +61,10 @@ def compute_itinerary_costs(
             if it.get("mode") == "eVTOL" and dep_station is not None:
                 tt += station_waits[dep_station][t]
                 energy_fare = phi_markup * e_per_pax * electricity_price[dep_station][t]
-                money += energy_fare
+                money_t += energy_fare
             costs[it["id"]][t] = {
                 "TT": tt,
-                "Money": money,
+                "Money": money_t,
                 "ChargeCost": charge_cost,
             }
     return costs
@@ -181,7 +187,7 @@ def aggregate_evtol_demand(
 
 
 def compute_evtol_energy_demand(
-    d_vt: Dict[str, Dict[int, float]],
+    d_route: Dict[str, Dict[int, float]],
     itineraries: List[Dict[str, Any]],
     times: List[int],
 ) -> Dict[str, Dict[int, float]]:
@@ -189,11 +195,12 @@ def compute_evtol_energy_demand(
     for it in itineraries:
         if it.get("mode") != "eVTOL":
             continue
+        it_id = it["id"]
         dep_station = it.get("dep_station")
         if dep_station is None:
             continue
         e_per_pax = it.get("e_per_pax", 0.0)
         e_dep.setdefault(dep_station, {t: 0.0 for t in times})
         for t in times:
-            e_dep[dep_station][t] += d_vt.get(dep_station, {}).get(t, 0.0) * e_per_pax
+            e_dep[dep_station][t] += d_route.get(it_id, {}).get(t, 0.0) * e_per_pax
     return e_dep

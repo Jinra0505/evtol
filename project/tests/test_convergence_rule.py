@@ -1,4 +1,7 @@
 import copy
+import pytest
+
+pytest.importorskip("gurobipy")
 
 from project.src.assignment import aggregate_arc_flows, compute_itinerary_costs, logit_assignment
 from project.src.congestion import compute_road_times, compute_station_waits
