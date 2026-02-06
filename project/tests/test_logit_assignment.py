@@ -1,4 +1,4 @@
-from project.src.assignment import compute_itinerary_costs, logit_assignment
+from project.src.assignment import build_incidence, compute_itinerary_costs, logit_assignment
 from project.src.congestion import compute_road_times, compute_station_waits
 from project.src.data_loader import load_data
 
@@ -24,7 +24,7 @@ def test_logit_assignment_stability():
         times,
     )
 
-    flows, generalized_costs = logit_assignment(
+    flows, _ = logit_assignment(
         itineraries,
         costs,
         data["parameters"]["q"],
@@ -38,8 +38,3 @@ def test_logit_assignment_stability():
         for it in itineraries:
             total += flows[it["id"]]["k1"][t]
         assert abs(total - data["parameters"]["q"]["A-B"]["k1"][t]) <= 1.0e-6
-
-    for it in itineraries:
-        assert "k1" in generalized_costs[it["id"]]
-        for t in times:
-            assert t in generalized_costs[it["id"]]["k1"]

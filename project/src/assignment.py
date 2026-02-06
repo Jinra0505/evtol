@@ -66,9 +66,9 @@ def logit_assignment(
     vot: Dict[str, Dict[int, float]],
     lambdas: Dict[str, float],
     times: List[int],
-) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
+) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[int, float]]]:
     flows: Dict[str, Dict[str, Dict[int, float]]] = {it["id"]: {} for it in itineraries}
-    generalized_costs: Dict[str, Dict[str, Dict[int, float]]] = {it["id"]: {} for it in itineraries}
+    generalized_costs: Dict[str, Dict[int, float]] = {it["id"]: {} for it in itineraries}
     itineraries_by_od: Dict[str, List[Dict[str, Any]]] = {}
     for it in itineraries:
         od_key = f"{it['od'][0]}-{it['od'][1]}"
@@ -89,7 +89,7 @@ def logit_assignment(
                         + comp["WaitCost"]
                         + comp["ChargeCost"]
                     )
-                    generalized_costs[it["id"]].setdefault(group, {})[t] = gen_cost
+                    generalized_costs[it["id"]][t] = gen_cost
                     cost_values.append(-lambdas[group] * gen_cost)
                 log_denom = logsumexp(cost_values)
                 total_demand = time_map[t]
@@ -101,35 +101,33 @@ def logit_assignment(
 
 def aggregate_arc_flows(
     itineraries: List[Dict[str, Any]],
+    inc_road: Dict[str, Dict[str, Dict[int, float]]],
     flows: Dict[str, Dict[str, Dict[int, float]]],
     times: List[int],
+    arcs: List[str],
 ) -> Dict[str, Dict[int, float]]:
-    arc_flows: Dict[str, Dict[int, float]] = {}
-    for it in itineraries:
-        for seg in it.get("road_arcs", []):
-            arc_flows.setdefault(seg["arc"], {t: 0.0 for t in times})
+    arc_flows = {arc: {t: 0.0 for t in times} for arc in arcs}
     for it in itineraries:
         for group, time_map in flows[it["id"]].items():
-            for seg in it.get("road_arcs", []):
-                arc = seg["arc"]
-                t = seg["t"]
-                arc_flows[arc][t] += seg.get("frac", 1.0) * time_map[t]
+            for t in times:
+                flow_val = time_map[t]
+                for arc in arcs:
+                    arc_flows[arc][t] += inc_road[arc][it["id"]][t] * flow_val
     return arc_flows
 
 
 def aggregate_station_utilization(
     itineraries: List[Dict[str, Any]],
+    inc_station: Dict[str, Dict[str, Dict[int, float]]],
     flows: Dict[str, Dict[str, Dict[int, float]]],
     times: List[int],
+    stations: List[str],
 ) -> Dict[str, Dict[int, float]]:
-    utilization: Dict[str, Dict[int, float]] = {}
-    for it in itineraries:
-        for stop in it.get("stations", []):
-            utilization.setdefault(stop["station"], {t: 0.0 for t in times})
+    utilization = {s: {t: 0.0 for t in times} for s in stations}
     for it in itineraries:
         for group, time_map in flows[it["id"]].items():
-            for stop in it.get("stations", []):
-                station = stop["station"]
-                t = stop["t"]
-                utilization[station][t] += time_map[t]
+            for t in times:
+                flow_val = time_map[t]
+                for s in stations:
+                    utilization[s][t] += inc_station[s][it["id"]][t] * flow_val
     return utilization
