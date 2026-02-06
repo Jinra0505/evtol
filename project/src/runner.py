@@ -3,8 +3,10 @@ from typing import Any, Dict, List, Tuple
 
 from .assignment import (
     aggregate_arc_flows,
+    aggregate_evtol_demand,
     aggregate_station_utilization,
     build_incidence,
+    compute_evtol_energy_demand,
     compute_itinerary_costs,
     logit_assignment,
 )
@@ -36,7 +38,6 @@ def compute_residuals(
     times = data["sets"]["time"]
     arcs = data["sets"]["arcs"]
     demand = data["parameters"]["q"]
-    delta_t = data["meta"]["delta_t"]
     arc_params = data["parameters"]["arcs"]
     boundary_in = data["parameters"]["boundary_in"]
     boundary_out = data["parameters"]["boundary_out"]
@@ -69,7 +70,7 @@ def compute_residuals(
     for idx, t in enumerate(times):
         residuals["C7"] = max(
             residuals["C7"],
-            abs(n_series[idx + 1] - (n_series[idx] + delta_t * (inflow[idx] - outflow[idx]))),
+            abs(n_series[idx + 1] - (n_series[idx] + inflow[idx] - outflow[idx])),
         )
 
     expected_g = compute_g(n_series, mfd_params)
@@ -101,6 +102,10 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
     dn = 0.0
     last_iteration = 0
 
+    d_vt_route: Dict[str, Dict[int, float]] = {}
+    d_vt_dep: Dict[str, Dict[int, float]] = {}
+    e_dep: Dict[str, Dict[int, float]] = {}
+
     for iteration in range(config["max_iter"]):
         last_iteration = iteration + 1
         g_by_time = {t: g_series[min(len(g_series) - 1, idx)] for idx, t in enumerate(times)}
@@ -123,6 +128,9 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
             data["parameters"]["lambda"],
             times,
         )
+        d_vt_route, d_vt_dep = aggregate_evtol_demand(flows, itineraries, times)
+        e_dep = compute_evtol_energy_demand(d_vt_route, itineraries, times, data["parameters"])
+
         x_new = aggregate_arc_flows(itineraries, flows, times)
         u_new = aggregate_station_utilization(itineraries, flows, times)
         x_new = _fill_missing(x_new, arcs, times)
@@ -158,7 +166,7 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
         inc_road,
     )
 
-    E, p_ch, y, charging_residuals = solve_charging(data)
+    E, p_ch, y, charging_residuals, B_vt, P_vt, inv_residuals = solve_charging(data, e_dep, d_vt_dep)
 
     results = {
         "x": arc_flows,
@@ -168,6 +176,10 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
         "u": utilization,
         "w": waits,
         "f": flows,
+        "d_vt_route": d_vt_route,
+        "d_vt_dep": d_vt_dep,
+        "e_dep": e_dep,
+        "inventory": {"B_vt": B_vt, "P_vt": P_vt, "residuals": inv_residuals},
         "residuals": residuals,
         "convergence": {"dx": dx, "dn": dn, "iterations": last_iteration},
         "charging": {
@@ -194,6 +206,7 @@ def main() -> None:
         "CBD": {"C6": residuals["C6"], "C7": residuals["C7"], "C8": residuals["C8"], "C9": residuals["C9"]},
         "Choice": {"C11": residuals["C11"]},
         "Charging": results["charging"]["residuals"],
+        "Inventory": results["inventory"]["residuals"],
     }
     print(json.dumps(report, indent=2))
 

@@ -133,3 +133,48 @@ def aggregate_station_utilization(
                 t = stop["t"]
                 utilization[station][t] += time_map[t]
     return utilization
+
+
+def aggregate_evtol_demand(
+    flows: Dict[str, Dict[str, Dict[int, float]]],
+    itineraries: List[Dict[str, Any]],
+    times: List[int],
+) -> Tuple[Dict[str, Dict[int, float]], Dict[str, Dict[int, float]]]:
+    d_route: Dict[str, Dict[int, float]] = {}
+    d_dep: Dict[str, Dict[int, float]] = {}
+    for it in itineraries:
+        if it.get("mode") != "eVTOL":
+            continue
+        it_id = it["id"]
+        d_route[it_id] = {t: 0.0 for t in times}
+        dep_station = it.get("dep_station")
+        if dep_station is not None:
+            d_dep.setdefault(dep_station, {t: 0.0 for t in times})
+        for group, time_map in flows.get(it_id, {}).items():
+            for t in times:
+                d_route[it_id][t] += time_map[t]
+                if dep_station is not None:
+                    d_dep[dep_station][t] += time_map[t]
+    return d_route, d_dep
+
+
+def compute_evtol_energy_demand(
+    d_route: Dict[str, Dict[int, float]],
+    itineraries: List[Dict[str, Any]],
+    times: List[int],
+    parameters: Dict[str, Any],
+) -> Dict[str, Dict[int, float]]:
+    e_per_pax_map = parameters.get("e_per_pax", {})
+    e_dep: Dict[str, Dict[int, float]] = {}
+    for it in itineraries:
+        if it.get("mode") != "eVTOL":
+            continue
+        it_id = it["id"]
+        dep_station = it.get("dep_station")
+        if dep_station is None:
+            continue
+        e_per_pax = it.get("e_per_pax", e_per_pax_map.get(it_id, 0.0))
+        e_dep.setdefault(dep_station, {t: 0.0 for t in times})
+        for t in times:
+            e_dep[dep_station][t] += d_route.get(it_id, {}).get(t, 0.0) * e_per_pax
+    return e_dep

@@ -140,6 +140,20 @@
         "1": 5.0,
         "2": 0.0
       }
+    },
+    "vertiport_storage": {
+      "s1": {
+        "E_init": 0.0,
+        "E_min": 0.0,
+        "E_max": 20.0,
+        "eta_ch": 0.9
+      }
+    },
+    "vertiport_cap_pax": {
+      "s1": {
+        "1": 20.0,
+        "2": 20.0
+      }
     }
   },
   "itineraries": [
@@ -204,11 +218,13 @@
       "mode": "eVTOL",
       "road_arcs": [],
       "stations": [],
-      "money": 8.0,
+      "money": 5.0,
       "flight_time": {
-        "1": 0.6,
-        "2": 0.6
-      }
+        "1": 0.5,
+        "2": 0.5
+      },
+      "dep_station": "s1",
+      "e_per_pax": 1.0
     }
   ]
 }
