@@ -143,9 +143,9 @@
     },
     "vertiport_storage": {
       "s1": {
-        "E_init": 0.0,
-        "E_min": 0.0,
-        "E_max": 20.0,
+        "B_init": 0.0,
+        "B_min": 0.0,
+        "B_max": 20.0,
         "eta_ch": 0.9
       }
     },
@@ -224,7 +224,8 @@
         "2": 0.5
       },
       "dep_station": "s1",
-      "e_per_pax": 1.0
+      "e_per_pax": 1.0,
+      "phi_energy_markup": 1.0
     }
   ]
 }

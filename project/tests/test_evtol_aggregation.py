@@ -1,7 +1,12 @@
-from project.src.assignment import aggregate_evtol_demand, compute_evtol_energy_demand
+from project.src.assignment import (
+    aggregate_evtol_dep_demand,
+    aggregate_evtol_demand,
+    compute_evtol_energy_demand,
+    compute_itinerary_costs,
+    logit_assignment,
+)
 from project.src.congestion import compute_road_times, compute_station_waits
 from project.src.data_loader import load_data
-from project.src.assignment import compute_itinerary_costs, logit_assignment
 
 
 def test_evtol_aggregation():
@@ -31,8 +36,9 @@ def test_evtol_aggregation():
         data["parameters"]["lambda"],
         times,
     )
-    d_route, d_dep = aggregate_evtol_demand(flows, itineraries, times)
-    e_dep = compute_evtol_energy_demand(d_route, itineraries, times, data["parameters"])
+    d_route = aggregate_evtol_demand(flows, itineraries, times)
+    d_dep = aggregate_evtol_dep_demand(itineraries, flows, times)
+    e_dep = compute_evtol_energy_demand(d_dep, itineraries, times)
 
     assert "vt1" in d_route
     for t in times:

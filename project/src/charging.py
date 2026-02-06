@@ -23,8 +23,8 @@ def solve_evtol_inventory(
         dep: {
             t: pulp.LpVariable(
                 f"B_{dep}_{t}",
-                lowBound=storage_params[dep]["E_min"],
-                upBound=storage_params[dep]["E_max"],
+                lowBound=storage_params[dep]["B_min"],
+                upBound=storage_params[dep]["B_max"],
             )
             for t in times
         }
@@ -45,7 +45,7 @@ def solve_evtol_inventory(
     for dep in e_dep:
         if dep not in storage_params:
             raise ValueError(f"Missing required key path: parameters.vertiport_storage.{dep}")
-        model += B[dep][times[0]] == storage_params[dep]["E_init"]
+        model += B[dep][times[0]] == storage_params[dep]["B_init"]
         eta = storage_params[dep]["eta_ch"]
         for idx, t in enumerate(times):
             if idx < len(times) - 1:
@@ -53,13 +53,6 @@ def solve_evtol_inventory(
                     B[dep][times[idx + 1]]
                     == B[dep][t] + eta * P[dep][t] * delta_t - e_dep[dep][t]
                 )
-
-    cap_pax = data["parameters"].get("vertiport_cap_pax")
-    if cap_pax:
-        for dep, time_map in d_dep.items():
-            for t in times:
-                if d_dep[dep][t] > cap_pax[dep][t]:
-                    raise ValueError(f"Vertiport pax cap exceeded at {dep}, t={t}")
 
     model.solve(pulp.PULP_CBC_CMD(msg=False))
     if pulp.LpStatus[model.status] != "Optimal":
@@ -78,12 +71,13 @@ def solve_evtol_inventory(
                 residuals["INV1"] = max(residuals["INV1"], abs(lhs - rhs))
             residuals["INV2"] = max(
                 residuals["INV2"],
-                max(storage_params[dep]["E_min"] - B_out[dep][t], B_out[dep][t] - storage_params[dep]["E_max"], 0.0),
+                max(storage_params[dep]["B_min"] - B_out[dep][t], B_out[dep][t] - storage_params[dep]["B_max"], 0.0),
             )
             residuals["INV3"] = max(
                 residuals["INV3"],
                 max(0.0, P_out[dep][t] - station_params[dep]["P_site"][t]),
             )
+    cap_pax = data["parameters"].get("vertiport_cap_pax")
     if cap_pax:
         for dep, time_map in d_dep.items():
             for t in times:

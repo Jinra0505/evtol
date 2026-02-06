@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Tuple
 
 from .assignment import (
     aggregate_arc_flows,
+    aggregate_evtol_dep_demand,
     aggregate_evtol_demand,
     aggregate_station_utilization,
     build_incidence,
@@ -42,6 +43,7 @@ def compute_residuals(
     boundary_in = data["parameters"]["boundary_in"]
     boundary_out = data["parameters"]["boundary_out"]
     mfd_params = data["parameters"]["mfd"]
+    delta_t = data["meta"]["delta_t"]
 
     residuals = {"C1": 0.0, "C2": 0.0, "C6": 0.0, "C7": 0.0, "C8": 0.0, "C9": 0.0, "C11": 0.0}
 
@@ -64,13 +66,15 @@ def compute_residuals(
                     expected += inc_road[arc][it["id"]][t] * time_map[t]
             residuals["C2"] = max(residuals["C2"], abs(arc_flows[arc][t] - expected))
 
-    inflow, outflow = boundary_flows(arc_flows, boundary_in, boundary_out, times)
+    inflow_total, outflow_total = boundary_flows(arc_flows, boundary_in, boundary_out, times)
+    inflow = [val / delta_t for val in inflow_total]
+    outflow = [val / delta_t for val in outflow_total]
     residuals["C6"] = 0.0
 
     for idx, t in enumerate(times):
         residuals["C7"] = max(
             residuals["C7"],
-            abs(n_series[idx + 1] - (n_series[idx] + inflow[idx] - outflow[idx])),
+            abs(n_series[idx + 1] - (n_series[idx] + delta_t * (inflow[idx] - outflow[idx]))),
         )
 
     expected_g = compute_g(n_series, mfd_params)
@@ -97,6 +101,7 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
     utilization = {s: {t: 0.0 for t in times} for s in stations}
     n_series = [data["parameters"]["n0"]]
     g_series = compute_g(n_series, data["parameters"]["mfd"])
+    penalty_waits = {s: {t: 0.0 for t in times} for s in stations}
 
     dx = 0.0
     dn = 0.0
@@ -111,6 +116,9 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
         g_by_time = {t: g_series[min(len(g_series) - 1, idx)] for idx, t in enumerate(times)}
         tau = compute_road_times(arc_flows, arc_params, g_by_time, times)
         waits = compute_station_waits(utilization, station_params, times)
+        for s in stations:
+            for t in times:
+                waits[s][t] += penalty_waits[s][t]
         itineraries += generate_itineraries(data, tau, waits, config)
         inc_road, inc_station = build_incidence(itineraries, arcs, stations, times)
         costs = compute_itinerary_costs(
@@ -128,15 +136,18 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
             data["parameters"]["lambda"],
             times,
         )
-        d_vt_route, d_vt_dep = aggregate_evtol_demand(flows, itineraries, times)
-        e_dep = compute_evtol_energy_demand(d_vt_route, itineraries, times, data["parameters"])
+        d_vt_route = aggregate_evtol_demand(flows, itineraries, times)
+        d_vt_dep = aggregate_evtol_dep_demand(itineraries, flows, times)
+        e_dep = compute_evtol_energy_demand(d_vt_dep, itineraries, times)
 
         x_new = aggregate_arc_flows(itineraries, flows, times)
         u_new = aggregate_station_utilization(itineraries, flows, times)
         x_new = _fill_missing(x_new, arcs, times)
         u_new = _fill_missing(u_new, stations, times)
 
-        inflow, outflow = boundary_flows(x_new, data["parameters"]["boundary_in"], data["parameters"]["boundary_out"], times)
+        inflow_total, outflow_total = boundary_flows(x_new, data["parameters"]["boundary_in"], data["parameters"]["boundary_out"], times)
+        inflow = [val / delta_t for val in inflow_total]
+        outflow = [val / delta_t for val in outflow_total]
         n_new = update_accumulation(data["parameters"]["n0"], inflow, outflow, delta_t)
 
         dx = max(abs(x_new[a][t] - arc_flows[a][t]) for a in arcs for t in times)
@@ -151,6 +162,13 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
                 utilization[s][t] = (1.0 - phi) * utilization[s][t] + phi * u_new[s][t]
         n_series = n_new
         g_series = compute_g(n_series, data["parameters"]["mfd"])
+
+        cap_pax = data["parameters"].get("vertiport_cap_pax")
+        if cap_pax:
+            for dep, time_map in d_vt_dep.items():
+                for t in times:
+                    over = max(0.0, time_map[t] - cap_pax[dep][t])
+                    penalty_waits[dep][t] = over * 10.0
 
         if max(dx, dn) < config["tol"]:
             break
