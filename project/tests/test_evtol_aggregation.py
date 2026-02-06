@@ -38,7 +38,7 @@ def test_evtol_aggregation():
     )
     d_route = aggregate_evtol_demand(flows, itineraries, times)
     d_dep = aggregate_evtol_dep_demand(itineraries, flows, times)
-    e_dep = compute_evtol_energy_demand(d_dep, itineraries, times)
+    e_dep = compute_evtol_energy_demand(d_route, itineraries, times)
 
     assert "vt1" in d_route
     for t in times:

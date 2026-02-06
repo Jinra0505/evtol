@@ -169,6 +169,24 @@ def aggregate_evtol_dep_demand(
     return d_dep
 
 
+def aggregate_ev_energy_demand(
+    itineraries: List[Dict[str, Any]],
+    flows: Dict[str, Dict[str, Dict[int, float]]],
+    times: List[int],
+) -> Dict[str, Dict[int, float]]:
+    energy: Dict[str, Dict[int, float]] = {}
+    for it in itineraries:
+        for stop in it.get("stations", []):
+            station = stop["station"]
+            energy.setdefault(station, {t: 0.0 for t in times})
+        for group, time_map in flows.get(it["id"], {}).items():
+            for stop in it.get("stations", []):
+                station = stop["station"]
+                t = stop["t"]
+                energy[station][t] += stop.get("energy", 0.0) * time_map[t]
+    return energy
+
+
 def aggregate_evtol_demand(
     flows: Dict[str, Dict[str, Dict[int, float]]],
     itineraries: List[Dict[str, Any]],

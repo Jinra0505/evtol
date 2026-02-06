@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Tuple
 
 from .assignment import (
     aggregate_arc_flows,
+    aggregate_ev_energy_demand,
     aggregate_evtol_dep_demand,
     aggregate_evtol_demand,
     aggregate_station_utilization,
@@ -11,7 +12,7 @@ from .assignment import (
     compute_itinerary_costs,
     logit_assignment,
 )
-from .charging import solve_charging
+from .charging import solve_charging, solve_shared_power_inventory_lp
 from .congestion import compute_road_times, compute_station_waits
 from .data_loader import load_data
 from .itinerary_generator import generate_itineraries
@@ -103,7 +104,7 @@ def compute_residuals(
     mfd_params = data["parameters"]["mfd"]
     delta_t = data["meta"]["delta_t"]
 
-    residuals = {"C1": 0.0, "C2": 0.0, "C6": 0.0, "C7": 0.0, "C8": 0.0, "C9": 0.0, "C11": 0.0, "C10": 0.0}
+    residuals = {"C1": 0.0, "C2": 0.0, "C7": 0.0, "C8": 0.0, "C9": 0.0, "C11": 0.0, "C10": 0.0}
 
     for od_key, groups in demand.items():
         for group, time_map in groups.items():
@@ -127,12 +128,7 @@ def compute_residuals(
     inflow_total, outflow_total = boundary_flows(arc_flows, boundary_in, boundary_out, times)
     inflow = [val / delta_t for val in inflow_total]
     outflow = [val / delta_t for val in outflow_total]
-    for idx, t in enumerate(times):
-        residuals["C6"] = max(
-            residuals["C6"],
-            abs(inflow_total[idx] - sum(arc_flows[a][t] for a in boundary_in))
-            + abs(outflow_total[idx] - sum(arc_flows[a][t] for a in boundary_out)),
-        )
+    for idx in range(len(times)):
         residuals["C7"] = max(
             residuals["C7"],
             abs(n_series[idx + 1] - (n_series[idx] + delta_t * (inflow[idx] - outflow[idx]))),
@@ -170,7 +166,12 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
 
     arc_flows = {a: {t: 0.0 for t in times} for a in arcs}
     utilization = {s: {t: 0.0 for t in times} for s in stations}
-    n_series = [data["parameters"]["n0"]]
+    n_series = update_accumulation(
+        data["parameters"]["n0"],
+        [0.0 for _ in times],
+        [0.0 for _ in times],
+        delta_t,
+    )
     g_series = compute_g(n_series, data["parameters"]["mfd"])
     energy_surcharge = {s: {t: 0.0 for t in times} for s in stations}
 
@@ -182,6 +183,11 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
     d_vt_dep: Dict[str, Dict[int, float]] = {}
     e_dep: Dict[str, Dict[int, float]] = {}
     shadow_prices: Dict[str, Dict[int, float]] | None = None
+    shed_ev: Dict[str, Dict[int, float]] | None = None
+    shed_vt: Dict[str, Dict[int, float]] | None = None
+    P_vt_lp: Dict[str, Dict[int, float]] | None = None
+    B_vt_lp: Dict[str, Dict[int, float]] | None = None
+    shared_power_residuals: Dict[str, float] | None = None
 
     for iteration in range(config["max_iter"]):
         last_iteration = iteration + 1
@@ -223,13 +229,7 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
         x_new = _fill_missing(x_new, arcs, times)
         u_new = _fill_missing(u_new, stations, times)
 
-        inflow_total, outflow_total = boundary_flows(x_new, data["parameters"]["boundary_in"], data["parameters"]["boundary_out"], times)
-        inflow = [val / delta_t for val in inflow_total]
-        outflow = [val / delta_t for val in outflow_total]
-        n_new = update_accumulation(data["parameters"]["n0"], inflow, outflow, delta_t)
-
         dx = max(abs(x_new[a][t] - arc_flows[a][t]) for a in arcs for t in times)
-        dn = max(abs(n_new[idx] - n_series[idx]) for idx in range(len(n_series)))
 
         phi = 1.0 / (iteration + 1.0)
         for a in arcs:
@@ -238,20 +238,31 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
         for s in stations:
             for t in times:
                 utilization[s][t] = (1.0 - phi) * utilization[s][t] + phi * u_new[s][t]
+        inflow_total, outflow_total = boundary_flows(
+            arc_flows, data["parameters"]["boundary_in"], data["parameters"]["boundary_out"], times
+        )
+        inflow = [val / delta_t for val in inflow_total]
+        outflow = [val / delta_t for val in outflow_total]
+        n_new = update_accumulation(data["parameters"]["n0"], inflow, outflow, delta_t)
+        dn = max(abs(n_new[idx] - n_series[idx]) for idx in range(len(n_series)))
         n_series = n_new
         g_series = compute_g(n_series, data["parameters"]["mfd"])
 
-        _, _, _, _, _, P_vt, _, shadow_prices = solve_charging(data, e_dep, d_vt_dep)
-        if P_vt:
-            for dep in P_vt:
+        ev_energy = aggregate_ev_energy_demand(itineraries, flows, times)
+        (
+            B_vt_lp,
+            P_vt_lp,
+            shed_ev,
+            shed_vt,
+            shadow_prices,
+            shared_power_residuals,
+        ) = solve_shared_power_inventory_lp(data, e_dep, ev_energy)
+
+        if shadow_prices:
+            for s in stations:
                 for t in times:
-                    cap = station_params[dep]["P_site"][t]
-                    ratio = 0.0 if cap <= 0 else P_vt[dep][t] / cap
-                    energy_surcharge[dep][t] = electricity_price[dep][t] * (ratio**2)
-        elif shadow_prices:
-            for dep, time_map in shadow_prices.items():
-                for t, price in time_map.items():
-                    energy_surcharge[dep][t] = max(0.0, price)
+                    new_surcharge = max(0.0, shadow_prices.get(s, {}).get(t, 0.0))
+                    energy_surcharge[s][t] = (1.0 - phi) * energy_surcharge[s][t] + phi * new_surcharge
 
         if max(dx, dn) < config["tol"]:
             break
@@ -269,7 +280,7 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
         utilization,
     )
 
-    E, p_ch, y, charging_residuals, B_vt, P_vt, inv_residuals, shadow_prices = solve_charging(data, e_dep, d_vt_dep)
+    E, p_ch, y, charging_residuals, B_vt, P_vt, inv_residuals, _ = solve_charging(data, e_dep, d_vt_dep)
 
     results = {
         "x": arc_flows,
@@ -283,8 +294,15 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
         "d_vt_dep": d_vt_dep,
         "e_dep": e_dep,
         "inventory": {"B_vt": B_vt, "P_vt": P_vt, "residuals": inv_residuals},
-        "shadow_prices": shadow_prices,
-        "energy_surcharge": energy_surcharge,
+        "shadow_price_power": shadow_prices,
+        "surcharge_power": energy_surcharge,
+        "shared_power": {
+            "B_vt": B_vt_lp,
+            "P_vt": P_vt_lp,
+            "shed_ev": shed_ev,
+            "shed_vt": shed_vt,
+            "residuals": shared_power_residuals,
+        },
         "residuals": residuals,
         "convergence": {"dx": dx, "dn": dn, "iterations": last_iteration},
         "charging": {
@@ -308,7 +326,7 @@ def main() -> None:
     save_outputs(results, "project/output.json")
     report = {
         "Traffic": {"C1": residuals["C1"], "C2": residuals["C2"]},
-        "CBD": {"C6": residuals["C6"], "C7": residuals["C7"], "C8": residuals["C8"], "C9": residuals["C9"]},
+        "CBD": {"C7": residuals["C7"], "C8": residuals["C8"], "C9": residuals["C9"]},
         "Choice": {"C11": residuals["C11"]},
         "Stations": {"C10": residuals["C10"]},
         "Charging": results["charging"]["residuals"],
