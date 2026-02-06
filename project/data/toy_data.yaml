@@ -1,67 +1,230 @@
 {
-  "meta": {"T": 2, "delta_t": 1.0},
+  "meta": {
+    "T": 2,
+    "delta_t": 1.0
+  },
   "config": {
     "max_iter": 20,
-    "tol": 1e-6,
-    "eps_improve": 1e-4,
+    "tol": 1e-06,
+    "eps_improve": 0.0001,
     "use_generator": false,
     "K_paths": 3
   },
   "sets": {
-    "time": [1, 2],
-    "vot_groups": ["k1"],
-    "od_pairs": [["A", "B"]],
-    "arcs": ["a_g1", "a_cbd1", "a_in", "a_out"],
-    "stations": ["s1"],
-    "vehicles": ["m1"]
+    "time": [
+      1,
+      2
+    ],
+    "vot_groups": [
+      "k1"
+    ],
+    "od_pairs": [
+      [
+        "A",
+        "B"
+      ]
+    ],
+    "arcs": [
+      "a_g1",
+      "a_cbd1",
+      "a_in",
+      "a_out"
+    ],
+    "stations": [
+      "s1"
+    ],
+    "vehicles": [
+      "m1"
+    ]
   },
   "parameters": {
-    "q": {"A-B": {"k1": {"1": 10.0, "2": 8.0}}},
-    "VOT": {"k1": {"1": 10.0, "2": 10.0}},
-    "lambda": {"k1": 0.1},
-    "arcs": {
-      "a_g1": {"tau0": 1.0, "cap": 100.0, "alpha": 0.15, "beta": 4.0, "type": "G", "theta": 1.0},
-      "a_cbd1": {"tau0": 2.0, "cap": 100.0, "alpha": 0.15, "beta": 4.0, "type": "CBD", "theta": 1.2},
-      "a_in": {"tau0": 1.0, "cap": 100.0, "alpha": 0.15, "beta": 4.0, "type": "CBD", "theta": 1.0},
-      "a_out": {"tau0": 1.0, "cap": 100.0, "alpha": 0.15, "beta": 4.0, "type": "CBD", "theta": 1.0}
+    "q": {
+      "A-B": {
+        "k1": {
+          "1": 10.0,
+          "2": 8.0
+        }
+      }
     },
-    "boundary_in": ["a_in"],
-    "boundary_out": ["a_out"],
+    "VOT": {
+      "k1": {
+        "1": 10.0,
+        "2": 10.0
+      }
+    },
+    "lambda": {
+      "k1": 0.1
+    },
+    "arcs": {
+      "a_g1": {
+        "tau0": 1.0,
+        "cap": 100.0,
+        "alpha": 0.15,
+        "beta": 4.0,
+        "type": "G",
+        "theta": 1.0
+      },
+      "a_cbd1": {
+        "tau0": 2.0,
+        "cap": 100.0,
+        "alpha": 0.15,
+        "beta": 4.0,
+        "type": "CBD",
+        "theta": 1.2
+      },
+      "a_in": {
+        "tau0": 1.0,
+        "cap": 100.0,
+        "alpha": 0.15,
+        "beta": 4.0,
+        "type": "CBD",
+        "theta": 1.0
+      },
+      "a_out": {
+        "tau0": 1.0,
+        "cap": 100.0,
+        "alpha": 0.15,
+        "beta": 4.0,
+        "type": "CBD",
+        "theta": 1.0
+      }
+    },
+    "boundary_in": [
+      "a_in"
+    ],
+    "boundary_out": [
+      "a_out"
+    ],
     "n0": 5.0,
-    "mfd": {"gamma": 0.1, "n_crit": 50.0, "g_max": 2.0},
+    "mfd": {
+      "gamma": 0.1,
+      "n_crit": 50.0,
+      "g_max": 2.0
+    },
     "stations": {
-      "s1": {"cap_stall": 5.0, "w0": 2.0, "P_site": {"1": 50.0, "2": 50.0}}
+      "s1": {
+        "cap_stall": 5.0,
+        "w0": 2.0,
+        "P_site": {
+          "1": 50.0,
+          "2": 50.0
+        }
+      }
     },
     "charging": {
-      "m1": {"E_min": 5.0, "E_max": 50.0, "E_init": 20.0, "E_res": 6.0, "eta_ch": 0.9, "P_max": 10.0}
+      "m1": {
+        "E_min": 5.0,
+        "E_max": 50.0,
+        "E_init": 9.0,
+        "E_res": 8.0,
+        "eta_ch": 0.9,
+        "P_max": 10.0
+      }
     },
-    "avail": {"m1": {"s1": {"1": 1, "2": 1}}},
-    "electricity_price": {"s1": {"1": 0.2, "2": 0.2}},
-    "e_fly_or_drive": {"m1": {"1": 0.0, "2": 0.0}}
+    "avail": {
+      "m1": {
+        "s1": {
+          "1": 1,
+          "2": 1
+        }
+      }
+    },
+    "electricity_price": {
+      "s1": {
+        "1": 0.2,
+        "2": 0.2
+      }
+    },
+    "e_fly_or_drive": {
+      "m1": {
+        "1": 5.0,
+        "2": 0.0
+      }
+    },
+    "vertiport_storage": {
+      "s1": {
+        "E_init": 0.0,
+        "E_min": 0.0,
+        "E_max": 20.0,
+        "eta_ch": 0.9
+      }
+    },
+    "vertiport_cap_pax": {
+      "s1": {
+        "1": 20.0,
+        "2": 20.0
+      }
+    }
   },
   "itineraries": [
     {
       "id": "ev1",
-      "od": ["A", "B"],
+      "od": [
+        "A",
+        "B"
+      ],
       "mode": "EV",
       "road_arcs": [
-        {"arc": "a_g1", "t": 1, "frac": 1.0},
-        {"arc": "a_cbd1", "t": 1, "frac": 1.0},
-        {"arc": "a_g1", "t": 2, "frac": 1.0},
-        {"arc": "a_cbd1", "t": 2, "frac": 1.0}
+        {
+          "arc": "a_in",
+          "t": 1,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_g1",
+          "t": 1,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_cbd1",
+          "t": 1,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_g1",
+          "t": 2,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_cbd1",
+          "t": 2,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_out",
+          "t": 2,
+          "frac": 1.0
+        }
       ],
-      "stations": [{"station": "s1", "t": 1, "energy": 2.0}],
+      "stations": [
+        {
+          "station": "s1",
+          "t": 1,
+          "energy": 2.0
+        }
+      ],
       "money": 1.0,
-      "flight_time": {"1": 0.0, "2": 0.0}
+      "flight_time": {
+        "1": 0.0,
+        "2": 0.0
+      }
     },
     {
       "id": "vt1",
-      "od": ["A", "B"],
+      "od": [
+        "A",
+        "B"
+      ],
       "mode": "eVTOL",
       "road_arcs": [],
       "stations": [],
-      "money": 8.0,
-      "flight_time": {"1": 0.6, "2": 0.6}
+      "money": 5.0,
+      "flight_time": {
+        "1": 0.5,
+        "2": 0.5
+      },
+      "dep_station": "s1",
+      "e_per_pax": 1.0
     }
   ]
 }

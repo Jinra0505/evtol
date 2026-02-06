@@ -66,9 +66,9 @@ def logit_assignment(
     vot: Dict[str, Dict[int, float]],
     lambdas: Dict[str, float],
     times: List[int],
-) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[int, float]]]:
+) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
     flows: Dict[str, Dict[str, Dict[int, float]]] = {it["id"]: {} for it in itineraries}
-    generalized_costs: Dict[str, Dict[int, float]] = {it["id"]: {} for it in itineraries}
+    generalized_costs: Dict[str, Dict[str, Dict[int, float]]] = {it["id"]: {} for it in itineraries}
     itineraries_by_od: Dict[str, List[Dict[str, Any]]] = {}
     for it in itineraries:
         od_key = f"{it['od'][0]}-{it['od'][1]}"
@@ -89,7 +89,7 @@ def logit_assignment(
                         + comp["WaitCost"]
                         + comp["ChargeCost"]
                     )
-                    generalized_costs[it["id"]][t] = gen_cost
+                    generalized_costs[it["id"]].setdefault(group, {})[t] = gen_cost
                     cost_values.append(-lambdas[group] * gen_cost)
                 log_denom = logsumexp(cost_values)
                 total_demand = time_map[t]
@@ -101,33 +101,80 @@ def logit_assignment(
 
 def aggregate_arc_flows(
     itineraries: List[Dict[str, Any]],
-    inc_road: Dict[str, Dict[str, Dict[int, float]]],
     flows: Dict[str, Dict[str, Dict[int, float]]],
     times: List[int],
-    arcs: List[str],
 ) -> Dict[str, Dict[int, float]]:
-    arc_flows = {arc: {t: 0.0 for t in times} for arc in arcs}
+    arc_flows: Dict[str, Dict[int, float]] = {}
+    for it in itineraries:
+        for seg in it.get("road_arcs", []):
+            arc_flows.setdefault(seg["arc"], {t: 0.0 for t in times})
     for it in itineraries:
         for group, time_map in flows[it["id"]].items():
-            for t in times:
-                flow_val = time_map[t]
-                for arc in arcs:
-                    arc_flows[arc][t] += inc_road[arc][it["id"]][t] * flow_val
+            for seg in it.get("road_arcs", []):
+                arc = seg["arc"]
+                t = seg["t"]
+                arc_flows[arc][t] += seg.get("frac", 1.0) * time_map[t]
     return arc_flows
 
 
 def aggregate_station_utilization(
     itineraries: List[Dict[str, Any]],
-    inc_station: Dict[str, Dict[str, Dict[int, float]]],
     flows: Dict[str, Dict[str, Dict[int, float]]],
     times: List[int],
-    stations: List[str],
 ) -> Dict[str, Dict[int, float]]:
-    utilization = {s: {t: 0.0 for t in times} for s in stations}
+    utilization: Dict[str, Dict[int, float]] = {}
+    for it in itineraries:
+        for stop in it.get("stations", []):
+            utilization.setdefault(stop["station"], {t: 0.0 for t in times})
     for it in itineraries:
         for group, time_map in flows[it["id"]].items():
-            for t in times:
-                flow_val = time_map[t]
-                for s in stations:
-                    utilization[s][t] += inc_station[s][it["id"]][t] * flow_val
+            for stop in it.get("stations", []):
+                station = stop["station"]
+                t = stop["t"]
+                utilization[station][t] += time_map[t]
     return utilization
+
+
+def aggregate_evtol_demand(
+    flows: Dict[str, Dict[str, Dict[int, float]]],
+    itineraries: List[Dict[str, Any]],
+    times: List[int],
+) -> Tuple[Dict[str, Dict[int, float]], Dict[str, Dict[int, float]]]:
+    d_route: Dict[str, Dict[int, float]] = {}
+    d_dep: Dict[str, Dict[int, float]] = {}
+    for it in itineraries:
+        if it.get("mode") != "eVTOL":
+            continue
+        it_id = it["id"]
+        d_route[it_id] = {t: 0.0 for t in times}
+        dep_station = it.get("dep_station")
+        if dep_station is not None:
+            d_dep.setdefault(dep_station, {t: 0.0 for t in times})
+        for group, time_map in flows.get(it_id, {}).items():
+            for t in times:
+                d_route[it_id][t] += time_map[t]
+                if dep_station is not None:
+                    d_dep[dep_station][t] += time_map[t]
+    return d_route, d_dep
+
+
+def compute_evtol_energy_demand(
+    d_route: Dict[str, Dict[int, float]],
+    itineraries: List[Dict[str, Any]],
+    times: List[int],
+    parameters: Dict[str, Any],
+) -> Dict[str, Dict[int, float]]:
+    e_per_pax_map = parameters.get("e_per_pax", {})
+    e_dep: Dict[str, Dict[int, float]] = {}
+    for it in itineraries:
+        if it.get("mode") != "eVTOL":
+            continue
+        it_id = it["id"]
+        dep_station = it.get("dep_station")
+        if dep_station is None:
+            continue
+        e_per_pax = it.get("e_per_pax", e_per_pax_map.get(it_id, 0.0))
+        e_dep.setdefault(dep_station, {t: 0.0 for t in times})
+        for t in times:
+            e_dep[dep_station][t] += d_route.get(it_id, {}).get(t, 0.0) * e_per_pax
+    return e_dep

@@ -1,25 +1,31 @@
-from project.src.congestion import compute_road_times
-from project.src.mfd import boundary_flows, compute_g, update_accumulation
+from project.src.data_loader import load_data
+from project.src.mfd import boundary_flows
+from project.src.runner import run_equilibrium
 
 
 def test_mfd_scheme2_residuals():
-    times = [1, 2]
-    arc_params = {
-        "a_cbd1": {"tau0": 2.0, "cap": 100.0, "alpha": 0.15, "beta": 4.0, "type": "CBD", "theta": 1.2},
-        "a_in": {"tau0": 1.0, "cap": 100.0, "alpha": 0.15, "beta": 4.0, "type": "CBD", "theta": 1.0},
-        "a_out": {"tau0": 1.0, "cap": 100.0, "alpha": 0.15, "beta": 4.0, "type": "CBD", "theta": 1.0},
-    }
-    arc_flows = {
-        "a_cbd1": {1: 10.0, 2: 12.0},
-        "a_in": {1: 5.0, 2: 6.0},
-        "a_out": {1: 4.0, 2: 5.0},
-    }
-    inflow, outflow = boundary_flows(arc_flows, ["a_in"], ["a_out"], times)
-    n = update_accumulation(5.0, inflow, outflow, 1.0)
-    g_series = compute_g(n, {"gamma": 0.1, "n_crit": 50.0, "g_max": 2.0})
-    g_by_time = {t: g_series[idx] for idx, t in enumerate(times)}
-    tau = compute_road_times(arc_flows, arc_params, g_by_time, times)
+    data = load_data("project/data/toy_data.yaml", "project/data_schema.yaml")
+    results, _ = run_equilibrium(data)
+    times = data["sets"]["time"]
 
-    for idx, t in enumerate(times):
-        g_expected = g_series[idx]
-        assert abs(tau["a_cbd1"][t] - 2.0 * g_expected * 1.2) <= 1.0e-6
+    n_series = results["n"]
+    g_series = results["g"]
+
+    inflow, outflow = boundary_flows(
+        results["x"],
+        data["parameters"]["boundary_in"],
+        data["parameters"]["boundary_out"],
+        times,
+    )
+    assert any(val > 0.0 for val in inflow + outflow)
+
+    assert any(abs(n_series[idx + 1] - n_series[idx]) > 0.0 for idx in range(len(times)))
+    assert any(abs(g_series[idx + 1] - g_series[idx]) > 0.0 for idx in range(len(times)))
+
+    for t_idx, t in enumerate(times):
+        tau_expected = (
+            data["parameters"]["arcs"]["a_cbd1"]["tau0"]
+            * g_series[t_idx]
+            * data["parameters"]["arcs"]["a_cbd1"]["theta"]
+        )
+        assert abs(results["tau"]["a_cbd1"][t] - tau_expected) <= 1.0e-6

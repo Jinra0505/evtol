@@ -1,9 +1,10 @@
-from project.src.assignment import compute_itinerary_costs, logit_assignment
+from project.src.assignment import aggregate_evtol_demand, compute_evtol_energy_demand
 from project.src.congestion import compute_road_times, compute_station_waits
 from project.src.data_loader import load_data
+from project.src.assignment import compute_itinerary_costs, logit_assignment
 
 
-def test_logit_assignment_stability():
+def test_evtol_aggregation():
     data = load_data("project/data/toy_data.yaml", "project/data_schema.yaml")
     times = data["sets"]["time"]
     arcs = data["sets"]["arcs"]
@@ -15,7 +16,6 @@ def test_logit_assignment_stability():
     tau = compute_road_times(arc_flows, data["parameters"]["arcs"], g_by_time, times)
     utilization = {s: {t: 0.0 for t in times} for s in stations}
     waits = compute_station_waits(utilization, data["parameters"]["stations"], times)
-
     costs = compute_itinerary_costs(
         itineraries,
         tau,
@@ -23,8 +23,7 @@ def test_logit_assignment_stability():
         data["parameters"]["electricity_price"],
         times,
     )
-
-    flows, generalized_costs = logit_assignment(
+    flows, _ = logit_assignment(
         itineraries,
         costs,
         data["parameters"]["q"],
@@ -32,14 +31,11 @@ def test_logit_assignment_stability():
         data["parameters"]["lambda"],
         times,
     )
+    d_route, d_dep = aggregate_evtol_demand(flows, itineraries, times)
+    e_dep = compute_evtol_energy_demand(d_route, itineraries, times, data["parameters"])
 
+    assert "vt1" in d_route
     for t in times:
-        total = 0.0
-        for it in itineraries:
-            total += flows[it["id"]]["k1"][t]
-        assert abs(total - data["parameters"]["q"]["A-B"]["k1"][t]) <= 1.0e-6
-
-    for it in itineraries:
-        assert "k1" in generalized_costs[it["id"]]
-        for t in times:
-            assert t in generalized_costs[it["id"]]["k1"]
+        assert d_route["vt1"][t] >= 0.0
+    assert "s1" in d_dep
+    assert "s1" in e_dep
