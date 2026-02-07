@@ -94,14 +94,23 @@ def logit_assignment(
                 if not alts:
                     raise ValueError(f"No itineraries for OD {od_key}")
                 cost_values = []
+                available_alts = []
                 for it in alts:
+                    if it.get("mode") == "eVTOL":
+                        flight_time = it.get("flight_time", {})
+                        if flight_time.get(t, 0.0) <= 0.0:
+                            continue
+                    available_alts.append(it)
+                if not available_alts:
+                    raise ValueError(f"No available itineraries for OD {od_key} at t={t}")
+                for it in available_alts:
                     comp = costs[it["id"]][t]
                     gen_cost = vot[group][t] * comp["TT"] + comp["Money"] + comp["ChargeCost"]
                     generalized_costs[it["id"]].setdefault(group, {})[t] = gen_cost
                     cost_values.append(-lambdas[group] * gen_cost)
                 log_denom = logsumexp(cost_values)
                 total_demand = time_map[t]
-                for it, util in zip(alts, cost_values):
+                for it, util in zip(available_alts, cost_values):
                     share = math.exp(util - log_denom)
                     flows[it["id"]].setdefault(group, {})[t] = total_demand * share
     return flows, generalized_costs
@@ -147,8 +156,10 @@ def aggregate_station_utilization(
             if it.get("mode") == "eVTOL":
                 dep_station = it.get("dep_station")
                 if dep_station is not None:
+                    flight_time = it.get("flight_time", {})
                     for t, val in time_map.items():
-                        utilization[dep_station][t] += val
+                        if flight_time.get(t, 0.0) > 0.0:
+                            utilization[dep_station][t] += val
     return utilization
 
 

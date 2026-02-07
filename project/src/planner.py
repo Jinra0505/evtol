@@ -72,7 +72,7 @@ def evaluate_plan(data: Dict[str, Any], plan: Dict[str, Any]) -> Tuple[float, Di
     data_copy = apply_plan_to_data(data, plan)
     results, residuals = run_equilibrium(data_copy)
 
-    travel_cost = 0.0
+    time_cost = 0.0
     flows = results["f"]
     costs = results["costs"]
     vot = data_copy["parameters"]["VOT"]
@@ -80,7 +80,7 @@ def evaluate_plan(data: Dict[str, Any], plan: Dict[str, Any]) -> Tuple[float, Di
         for group, time_map in group_map.items():
             for t, flow in time_map.items():
                 comp = costs[it_id][t]
-                travel_cost += flow * (vot[group][t] * comp["TT"] + comp["Money"])
+                time_cost += flow * (vot[group][t] * comp["TT"])
 
     energy_cost = 0.0
     prices = data_copy["parameters"]["electricity_price"]
@@ -116,9 +116,9 @@ def evaluate_plan(data: Dict[str, Any], plan: Dict[str, Any]) -> Tuple[float, Di
     if budget is not None and invest_cost > budget:
         return 1.0e18, {"budget_violation": invest_cost - budget}, results
 
-    total_cost = travel_cost + energy_cost + shed_cost + invest_cost
+    total_cost = time_cost + energy_cost + shed_cost + invest_cost
     diagnostics = {
-        "travel_cost": travel_cost,
+        "time_cost": time_cost,
         "energy_cost": energy_cost,
         "shed_cost": shed_cost,
         "invest_cost": invest_cost,
@@ -129,13 +129,14 @@ def evaluate_plan(data: Dict[str, Any], plan: Dict[str, Any]) -> Tuple[float, Di
     return total_cost, diagnostics, results
 
 
-def solve_planning(data: Dict[str, Any]) -> Tuple[Dict[str, Any], float, Dict[str, Any]]:
+def solve_planning(data: Dict[str, Any]) -> Tuple[Dict[str, Any], float, Dict[str, Any], Dict[str, float]]:
     plans = generate_candidate_plans(data)
     cache: Dict[Tuple[Any, ...], Tuple[float, Dict[str, float], Dict[str, Any]]] = {}
 
     best_plan = None
     best_cost = float("inf")
     best_results: Dict[str, Any] = {}
+    best_diag: Dict[str, float] = {}
 
     for plan in plans:
         key = (
@@ -144,29 +145,48 @@ def solve_planning(data: Dict[str, Any]) -> Tuple[Dict[str, Any], float, Dict[st
             tuple(sorted(plan["delta_cap_pax"].items())),
         )
         if key in cache:
-            cost, _, results = cache[key]
+            cost, diag, results = cache[key]
         else:
             cost, diagnostics, results = evaluate_plan(data, plan)
             cache[key] = (cost, diagnostics, results)
+            diag = diagnostics
         if cost < best_cost:
             best_cost = cost
             best_plan = plan
             best_results = results
+            best_diag = diag
 
     if best_plan is None:
         raise ValueError("No planning candidates evaluated.")
 
-    return best_plan, best_cost, best_results
+    return best_plan, best_cost, best_results, best_diag
 
 
 def main() -> None:
+    import argparse
+    import os
     from .data_loader import load_data
 
-    data = load_data("project/data/toy_data.yaml", "project/data_schema.yaml")
-    best_plan, best_cost, best_results = solve_planning(data)
+    def _resolve_path(path: str, fallback: str) -> str:
+        if os.path.exists(path):
+            return path
+        if os.path.exists(fallback):
+            return fallback
+        raise FileNotFoundError(f"Could not find data file: {path}")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data", default="toy_data.yaml", help="Path to data YAML")
+    parser.add_argument("--schema", default="data_schema.yaml", help="Path to schema YAML")
+    args = parser.parse_args()
+
+    data_path = _resolve_path(args.data, "project/data/toy_data.yaml")
+    schema_path = _resolve_path(args.schema, "project/data_schema.yaml")
+    data = load_data(data_path, schema_path)
+    best_plan, best_cost, best_results, best_diag = solve_planning(data)
     output = {
         "best_plan": best_plan,
         "best_cost": best_cost,
+        "best_breakdown": best_diag,
         "best_results": best_results,
     }
     with open("project/planning_output.json", "w", encoding="utf-8") as handle:

@@ -1,15 +1,15 @@
 from typing import Any, Dict, Tuple
-import importlib.util
 
 from .assignment import aggregate_ev_energy_demand, aggregate_evtol_demand, compute_evtol_energy_demand
 
-if importlib.util.find_spec("gurobipy") is None:
-    raise ImportError(
-        "gurobipy is required for charging optimization. Please install Gurobi and set up a license."
-    )
+HAS_GUROBI = True
+try:
+    import gurobipy as gp
+    from gurobipy import GRB
+except ImportError:
+    HAS_GUROBI = False
 
-import gurobipy as gp
-from gurobipy import GRB
+LAST_SOLVER_USED = "unknown"
 
 
 def _solve_shared_power_core(
@@ -25,6 +25,9 @@ def _solve_shared_power_core(
     Dict[str, Dict[int, float]],
     Dict[str, float],
 ]:
+    if not HAS_GUROBI:
+        return _solve_shared_power_core_pulp(data, times, e_dep, ev_energy)
+
     stations = data["sets"]["stations"]
     delta_t = data["meta"]["delta_t"]
     station_params = data["parameters"]["stations"]
@@ -126,6 +129,110 @@ def _solve_shared_power_core(
     return B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals
 
 
+def _solve_shared_power_core_pulp(
+    data: Dict[str, Any],
+    times: list[int],
+    e_dep: Dict[str, Dict[int, float]],
+    ev_energy: Dict[str, Dict[int, float]],
+) -> Tuple[
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, float],
+]:
+    from . import pulp as pl
+
+    stations = data["sets"]["stations"]
+    delta_t = data["meta"]["delta_t"]
+    station_params = data["parameters"]["stations"]
+    prices = data["parameters"]["electricity_price"]
+    storage_params = data["parameters"].get("vertiport_storage")
+
+    if storage_params is None and e_dep:
+        raise ValueError("Missing required key path: parameters.vertiport_storage")
+
+    model = pl.LpProblem("shared_power_inventory", pl.LpMinimize)
+
+    B = {}
+    P_vt = {}
+    shed_vt = {}
+    for dep in e_dep:
+        if dep not in storage_params:
+            raise ValueError(f"Missing required key path: parameters.vertiport_storage.{dep}")
+        for t in times:
+            B[dep, t] = pl.LpVariable(
+                f"B_{dep}_{t}",
+                lowBound=storage_params[dep]["B_min"],
+                upBound=storage_params[dep]["B_max"],
+            )
+            P_vt[dep, t] = pl.LpVariable(
+                f"P_vt_{dep}_{t}", lowBound=0.0, upBound=station_params[dep]["P_site"][t]
+            )
+            shed_vt[dep, t] = pl.LpVariable(f"shed_vt_{dep}_{t}", lowBound=0.0)
+
+    shed_ev = {(s, t): pl.LpVariable(f"shed_ev_{s}_{t}", lowBound=0.0) for s in stations for t in times}
+
+    penalty_ev = 1.0e6
+    penalty_vt = 1.0e6
+    model += pl.lpSum(
+        prices[dep][t] * P_vt[dep, t] * delta_t for dep in e_dep for t in times
+    ) + penalty_ev * pl.lpSum(shed_ev[s, t] * delta_t for s in stations for t in times) + penalty_vt * pl.lpSum(
+        shed_vt[dep, t] for dep in e_dep for t in times
+    )
+
+    for dep in e_dep:
+        model += B[dep, times[0]] == storage_params[dep]["B_init"]
+        eta = storage_params[dep]["eta_ch"]
+        for idx, t in enumerate(times):
+            if idx < len(times) - 1:
+                model += (
+                    B[dep, times[idx + 1]]
+                    == B[dep, t] + eta * P_vt[dep, t] * delta_t - (e_dep[dep][t] - shed_vt[dep, t])
+                )
+
+    for s in stations:
+        for t in times:
+            p_ev_req = ev_energy.get(s, {}).get(t, 0.0) / delta_t
+            p_vt_sum = pl.lpSum(P_vt[dep, t] for dep in e_dep if dep == s)
+            model += p_vt_sum + p_ev_req - shed_ev[s, t] <= station_params[s]["P_site"][t]
+
+    status = model.solve(pl.PULP_CBC_CMD(msg=False))
+    if pl.LpStatus[status] != "Optimal":
+        raise ValueError("Shared power LP did not solve to optimality with pulp.")
+
+    B_out = {dep: {t: pl.value(B[dep, t]) for t in times} for dep in e_dep}
+    P_out = {dep: {t: pl.value(P_vt[dep, t]) for t in times} for dep in e_dep}
+    shed_ev_out = {s: {t: pl.value(shed_ev[s, t]) for t in times} for s in stations}
+    shed_vt_out = {dep: {t: pl.value(shed_vt[dep, t]) for t in times} for dep in e_dep}
+    shadow_prices = {s: {t: 0.0 for t in times} for s in stations}
+
+    residuals = {"INV1": 0.0, "INV2": 0.0, "INV3": 0.0, "INV4": 0.0}
+    for dep in e_dep:
+        eta = storage_params[dep]["eta_ch"]
+        for idx, t in enumerate(times):
+            if idx < len(times) - 1:
+                lhs = B_out[dep][times[idx + 1]]
+                rhs = B_out[dep][t] + eta * P_out[dep][t] * delta_t - (e_dep[dep][t] - shed_vt_out[dep][t])
+                residuals["INV1"] = max(residuals["INV1"], abs(lhs - rhs))
+            residuals["INV2"] = max(
+                residuals["INV2"],
+                max(storage_params[dep]["B_min"] - B_out[dep][t], B_out[dep][t] - storage_params[dep]["B_max"], 0.0),
+            )
+    for s in stations:
+        for t in times:
+            p_ev_req = ev_energy.get(s, {}).get(t, 0.0) / delta_t
+            p_vt_sum = sum(P_out.get(dep, {}).get(t, 0.0) for dep in e_dep if dep == s)
+            residuals["INV3"] = max(
+                residuals["INV3"],
+                max(0.0, p_vt_sum + p_ev_req - shed_ev_out[s][t] - station_params[s]["P_site"][t]),
+            )
+            residuals["INV4"] = max(residuals["INV4"], max(0.0, shed_ev_out[s][t]))
+
+    return B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals
+
+
 def solve_shared_power_lp(
     data: Dict[str, Any],
     itineraries: list[Dict[str, Any]],
@@ -175,6 +282,12 @@ def solve_charging(
     Dict[str, float] | None,
     Dict[str, Dict[int, float]] | None,
 ]:
+    global LAST_SOLVER_USED
+
+    if not HAS_GUROBI:
+        return _solve_charging_pulp(data, e_dep, d_dep)
+
+    LAST_SOLVER_USED = "gurobi"
     times = data["sets"]["time"]
     vehicles = data["sets"]["vehicles"]
     stations = data["sets"]["stations"]
@@ -295,6 +408,139 @@ def solve_charging(
     if include_vt:
         B_out = {dep: {t: float(B_vt[dep, t].X) for t in times} for dep in e_dep}
         P_out = {dep: {t: float(P_vt[dep, t].X) for t in times} for dep in e_dep}
+        inv_residuals = compute_inventory_residuals(data, e_dep, B_out, P_out)
+
+    residuals = compute_charging_residuals(data, E_out, p_out, y_out, P_out)
+
+    return E_out, p_out, y_out, residuals, B_out, P_out, inv_residuals, shadow_prices
+
+
+def _solve_charging_pulp(
+    data: Dict[str, Any],
+    e_dep: Dict[str, Dict[int, float]] | None = None,
+    d_dep: Dict[str, Dict[int, float]] | None = None,
+) -> Tuple[
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[str, Dict[int, float]]],
+    Dict[str, Dict[str, Dict[int, int]]],
+    Dict[str, float],
+    Dict[str, Dict[int, float]] | None,
+    Dict[str, Dict[int, float]] | None,
+    Dict[str, float] | None,
+    Dict[str, Dict[int, float]] | None,
+]:
+    from . import pulp as pl
+
+    global LAST_SOLVER_USED
+    LAST_SOLVER_USED = "pulp"
+
+    times = data["sets"]["time"]
+    vehicles = data["sets"]["vehicles"]
+    stations = data["sets"]["stations"]
+    delta_t = data["meta"]["delta_t"]
+    charging_params = data["parameters"]["charging"]
+    avail = data["parameters"]["avail"]
+    e_fly_or_drive = data["parameters"]["e_fly_or_drive"]
+    station_params = data["parameters"]["stations"]
+    prices = data["parameters"]["electricity_price"]
+    storage_params = data["parameters"].get("vertiport_storage")
+
+    include_vt = e_dep is not None and d_dep is not None and any(
+        val > 0.0 for dep in (e_dep or {}) for val in e_dep[dep].values()
+    )
+    if include_vt and storage_params is None:
+        raise ValueError("Missing required key path: parameters.vertiport_storage")
+
+    model = pl.LpProblem("charging", pl.LpMinimize)
+
+    E = {}
+    p_ch = {}
+    y = {}
+    for m in vehicles:
+        for t in times:
+            E[m, t] = pl.LpVariable(
+                f"E_{m}_{t}",
+                lowBound=charging_params[m]["E_min"],
+                upBound=charging_params[m]["E_max"],
+            )
+        for s in stations:
+            for t in times:
+                p_ch[m, s, t] = pl.LpVariable(f"p_{m}_{s}_{t}", lowBound=0.0, upBound=charging_params[m]["P_max"])
+                y[m, s, t] = pl.LpVariable(f"y_{m}_{s}_{t}", lowBound=0.0, upBound=1.0, cat="Binary")
+
+    B_vt = {}
+    P_vt = {}
+    if include_vt:
+        for dep in e_dep:
+            if dep not in storage_params:
+                raise ValueError(f"Missing required key path: parameters.vertiport_storage.{dep}")
+            for t in times:
+                B_vt[dep, t] = pl.LpVariable(
+                    f"B_vt_{dep}_{t}",
+                    lowBound=storage_params[dep]["B_min"],
+                    upBound=storage_params[dep]["B_max"],
+                )
+                P_vt[dep, t] = pl.LpVariable(
+                    f"P_vt_{dep}_{t}", lowBound=0.0, upBound=station_params[dep]["P_site"][t]
+                )
+
+    model += pl.lpSum(
+        prices[s][t] * p_ch[m, s, t] * delta_t for m in vehicles for s in stations for t in times
+    ) + pl.lpSum(prices[dep][t] * P_vt[dep, t] * delta_t for dep in e_dep or {} for t in times)
+
+    for m in vehicles:
+        model += E[m, times[0]] == charging_params[m]["E_init"]
+        eta = charging_params[m]["eta_ch"]
+        E_res = charging_params[m]["E_res"]
+        for idx, t in enumerate(times):
+            model += E[m, t] >= E_res
+            if idx < len(times) - 1:
+                model += (
+                    E[m, times[idx + 1]]
+                    == E[m, t]
+                    - e_fly_or_drive[m][t]
+                    + pl.lpSum(eta * p_ch[m, s, t] * delta_t for s in stations)
+                )
+            model += pl.lpSum(y[m, s, t] for s in stations) <= 1
+            for s in stations:
+                model += p_ch[m, s, t] <= charging_params[m]["P_max"] * y[m, s, t]
+                model += y[m, s, t] <= avail[m][s][t]
+
+    for s in stations:
+        cap = station_params[s]["cap_stall"]
+        for t in times:
+            vt_power = pl.lpSum(P_vt[dep, t] for dep in e_dep or {} if dep == s) if include_vt else 0.0
+            model += pl.lpSum(p_ch[m, s, t] for m in vehicles) + vt_power <= station_params[s]["P_site"][t]
+            model += pl.lpSum(y[m, s, t] for m in vehicles) <= cap
+
+    if include_vt:
+        for dep in e_dep:
+            model += B_vt[dep, times[0]] == storage_params[dep]["B_init"]
+            eta = storage_params[dep]["eta_ch"]
+            for idx, t in enumerate(times):
+                if idx < len(times) - 1:
+                    model += (
+                        B_vt[dep, times[idx + 1]]
+                        == B_vt[dep, t] + eta * P_vt[dep, t] * delta_t - e_dep[dep][t]
+                    )
+
+    status = model.solve(pl.PULP_CBC_CMD(msg=False))
+    if pl.LpStatus[status] != "Optimal":
+        raise ValueError("Charging optimization did not solve to optimality with pulp.")
+
+    E_out = {m: {t: pl.value(E[m, t]) for t in times} for m in vehicles}
+    p_out = {m: {s: {t: pl.value(p_ch[m, s, t]) for t in times} for s in stations} for m in vehicles}
+    y_out = {
+        m: {s: {t: int(round(pl.value(y[m, s, t]))) for t in times} for s in stations} for m in vehicles
+    }
+
+    B_out = None
+    P_out = None
+    inv_residuals = None
+    shadow_prices = None
+    if include_vt:
+        B_out = {dep: {t: pl.value(B_vt[dep, t]) for t in times} for dep in e_dep}
+        P_out = {dep: {t: pl.value(P_vt[dep, t]) for t in times} for dep in e_dep}
         inv_residuals = compute_inventory_residuals(data, e_dep, B_out, P_out)
 
     residuals = compute_charging_residuals(data, E_out, p_out, y_out, P_out)

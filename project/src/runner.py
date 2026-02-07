@@ -13,7 +13,7 @@ from .assignment import (
     compute_itinerary_costs,
     logit_assignment,
 )
-from .charging import solve_charging, solve_shared_power_lp
+from .charging import LAST_SOLVER_USED, solve_charging, solve_shared_power_lp
 from .congestion import compute_road_times, compute_station_waits
 from .data_loader import load_data
 from .itinerary_generator import generate_itineraries
@@ -165,7 +165,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     stations = data["sets"]["stations"]
     delta_t = data["meta"]["delta_t"]
     config = data["config"]
+    config["tol"] = float(config["tol"])
     itineraries = list(data["itineraries"])
+    seen_ids = {it["id"] for it in itineraries}
     arc_params = data["parameters"]["arcs"]
     station_params = data["parameters"]["stations"]
     electricity_price = data["parameters"]["electricity_price"]
@@ -206,7 +208,12 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             s: {t: electricity_price[s][t] + energy_surcharge[s][t] for t in times}
             for s in stations
         }
-        itineraries += generate_itineraries(data, tau, waits, config)
+        generated = generate_itineraries(data, tau, waits, config)
+        if generated:
+            for it in generated:
+                if it["id"] not in seen_ids:
+                    itineraries.append(it)
+                    seen_ids.add(it["id"])
         inc_road, inc_station = build_incidence(itineraries, arcs, stations, times)
         costs = compute_itinerary_costs(
             itineraries,
@@ -345,6 +352,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "y": y,
             "residuals": charging_residuals,
         },
+        "solver_used": LAST_SOLVER_USED,
     }
     return results, residuals
 
@@ -354,20 +362,34 @@ def save_outputs(results: Dict[str, Any], path: str) -> None:
         json.dump(results, handle, indent=2)
 
 
+def _resolve_path(path: str, fallback: str) -> str:
+    import os
+
+    if os.path.exists(path):
+        return path
+    if os.path.exists(fallback):
+        return fallback
+    raise FileNotFoundError(f"Could not find data file: {path}")
+
+
 def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", action="store_true", help="Run planning layer search")
+    parser.add_argument("--data", default="toy_data.yaml", help="Path to data YAML")
+    parser.add_argument("--schema", default="data_schema.yaml", help="Path to schema YAML")
     args = parser.parse_args()
 
-    data = load_data("project/data/toy_data.yaml", "project/data_schema.yaml")
+    data_path = _resolve_path(args.data, "project/data/toy_data.yaml")
+    schema_path = _resolve_path(args.schema, "project/data_schema.yaml")
+    data = load_data(data_path, schema_path)
     if args.plan:
         from .planner import solve_planning
 
-        best_plan, best_cost, best_results = solve_planning(data)
+        best_plan, best_cost, best_results, best_diag = solve_planning(data)
         save_outputs(best_results, "project/output.json")
-        print(json.dumps({"best_plan": best_plan, "best_cost": best_cost}, indent=2))
+        print(json.dumps({"best_plan": best_plan, "best_cost": best_cost, "best_breakdown": best_diag}, indent=2))
         return
 
     results, residuals = run_equilibrium(data)
@@ -383,6 +405,7 @@ def main() -> None:
         "Surcharge": results["surcharge_power"],
         "SurchargeRaw": results["surcharge_power_raw"],
         "ShadowPrice": results["shadow_price_power"],
+        "Solver": results["solver_used"],
     }
     print(json.dumps(report, indent=2))
 
