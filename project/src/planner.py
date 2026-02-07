@@ -1,6 +1,14 @@
 import copy
 import itertools
+import os
+import sys
 from typing import Any, Dict, List, Tuple
+
+if __package__ is None:
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    if repo_root not in sys.path:
+        sys.path.append(repo_root)
+    __package__ = "project.src"
 
 from .runner import run_equilibrium
 
@@ -11,6 +19,7 @@ def _planning_defaults(data: Dict[str, Any]) -> Dict[str, Any]:
         "delta_stall": [0, 1, 2],
         "delta_cap_pax": [0.0, 5.0, 10.0],
         "price_factor": [1.0],
+        "max_plans": None,
         "cP": 1.0,
         "cS": 5.0,
         "cV": 2.0,
@@ -94,16 +103,15 @@ def evaluate_plan(data: Dict[str, Any], plan: Dict[str, Any]) -> Tuple[float, Di
 
     energy_cost = 0.0
     prices = data_copy["parameters"]["electricity_price"]
-    surcharge = results["surcharge_power"]
     delta_t = data_copy["meta"]["delta_t"]
     for m, station_map in results["charging"]["p_ch"].items():
         for s, time_map in station_map.items():
             for t, power in time_map.items():
-                energy_cost += (prices[s][t] + surcharge[s][t]) * power * delta_t
+                energy_cost += prices[s][t] * power * delta_t
     if results["inventory"]["P_vt"]:
         for dep, time_map in results["inventory"]["P_vt"].items():
             for t, power in time_map.items():
-                energy_cost += (prices[dep][t] + surcharge[dep][t]) * power * delta_t
+                energy_cost += prices[dep][t] * power * delta_t
 
     shed_penalty = planning["shed_penalty"]
     shed_cost = 0.0
@@ -142,7 +150,11 @@ def evaluate_plan(data: Dict[str, Any], plan: Dict[str, Any]) -> Tuple[float, Di
 
 
 def solve_planning(data: Dict[str, Any]) -> Tuple[Dict[str, Any], float, Dict[str, Any], Dict[str, float]]:
+    planning = _planning_defaults(data)
     plans = generate_candidate_plans(data)
+    max_plans = planning.get("max_plans")
+    if max_plans is not None:
+        plans = plans[: int(max_plans)]
     cache: Dict[Tuple[Any, ...], Tuple[float, Dict[str, float], Dict[str, Any]]] = {}
 
     best_plan = None
@@ -183,8 +195,18 @@ def main() -> None:
     def _resolve_path(path: str, fallback: str) -> str:
         if os.path.exists(path):
             return path
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        data_candidate = os.path.join(repo_root, "project", "data", os.path.basename(path))
+        if os.path.exists(data_candidate):
+            return data_candidate
+        schema_candidate = os.path.join(repo_root, "project", os.path.basename(path))
+        if os.path.exists(schema_candidate):
+            return schema_candidate
         if os.path.exists(fallback):
             return fallback
+        candidate = os.path.join(repo_root, fallback)
+        if os.path.exists(candidate):
+            return candidate
         raise FileNotFoundError(f"Could not find data file: {path}")
 
     parser = argparse.ArgumentParser()

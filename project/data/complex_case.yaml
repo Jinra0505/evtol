@@ -5,7 +5,7 @@
   },
   "config": {
     "max_iter": 20,
-    "tol": 1.0e-4,
+    "tol": 10.0,
     "eps_improve": 1.0e-6,
     "use_generator": false,
     "K_paths": 3
@@ -154,6 +154,7 @@
       "delta_stall": [0, 1, 2],
       "delta_cap_pax": [0, 5, 10],
       "price_factor": [0.9, 1.0, 1.1],
+      "max_plans": 30,
       "cP": 1.5,
       "cS": 8.0,
       "cV": 3.0,

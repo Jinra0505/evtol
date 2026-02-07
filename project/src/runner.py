@@ -1,5 +1,13 @@
 import copy
 import json
+import os
+import sys
+
+if __package__ is None:
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    if repo_root not in sys.path:
+        sys.path.append(repo_root)
+    __package__ = "project.src"
 from typing import Any, Dict, List, Tuple
 
 from .assignment import (
@@ -13,7 +21,8 @@ from .assignment import (
     compute_itinerary_costs,
     logit_assignment,
 )
-from .charging import LAST_SOLVER_USED, solve_charging, solve_shared_power_lp
+from . import charging
+from .charging import solve_charging, solve_shared_power_lp
 from .congestion import compute_road_times, compute_station_waits
 from .data_loader import load_data
 from .itinerary_generator import generate_itineraries
@@ -48,7 +57,7 @@ def _apply_vertiport_caps(
             total = 0.0
             for it in it_list:
                 for group, time_map in flows[it["id"]].items():
-                    total += time_map[t]
+                    total += time_map.get(t, 0.0)
             cap = cap_pax[dep][t]
             if total <= cap:
                 continue
@@ -59,10 +68,10 @@ def _apply_vertiport_caps(
             for it in it_list:
                 for group, time_map in flows[it["id"]].items():
                     key = (f"{it['od'][0]}-{it['od'][1]}", group)
-                    original = time_map[t]
+                    original = time_map.get(t, 0.0)
                     reduced = original * ratio
                     reductions[key] = reductions.get(key, 0.0) + (original - reduced)
-                    flows[it["id"]][group][t] = reduced
+                    flows[it["id"]].setdefault(group, {})[t] = reduced
 
             for (od_key, group), delta in reductions.items():
                 alternatives = [
@@ -72,14 +81,15 @@ def _apply_vertiport_caps(
                 ]
                 if not alternatives:
                     raise ValueError(f"No non-eVTOL alternative to enforce cap for {od_key}, {group}, t={t}")
-                total_alt = sum(flows[it["id"]][group][t] for it in alternatives)
+                total_alt = sum(flows[it["id"]].get(group, {}).get(t, 0.0) for it in alternatives)
                 if total_alt <= 0.0:
                     share = 1.0 / len(alternatives)
                     for it in alternatives:
-                        flows[it["id"]][group][t] += delta * share
+                        flows[it["id"]].setdefault(group, {})[t] = flows[it["id"]].get(group, {}).get(t, 0.0) + delta * share
                 else:
                     for it in alternatives:
-                        flows[it["id"]][group][t] += delta * flows[it["id"]][group][t] / total_alt
+                        current = flows[it["id"]].get(group, {}).get(t, 0.0)
+                        flows[it["id"]].setdefault(group, {})[t] = current + delta * current / total_alt
 
     return flows
 
@@ -89,12 +99,14 @@ def compute_residuals(
     itineraries: List[Dict[str, Any]],
     flows: Dict[str, Dict[str, Dict[int, float]]],
     arc_flows: Dict[str, Dict[int, float]],
+    arc_flows_raw: Dict[str, Dict[int, float]] | None,
     tau: Dict[str, Dict[int, float]],
     n_series: List[float],
     g_series: List[float],
     inc_road: Dict[str, Dict[str, Dict[int, float]]],
     inc_station: Dict[str, Dict[str, Dict[int, float]]],
     utilization: Dict[str, Dict[int, float]],
+    utilization_raw: Dict[str, Dict[int, float]] | None,
 ) -> Dict[str, float]:
     times = data["sets"]["time"]
     arcs = data["sets"]["arcs"]
@@ -118,13 +130,14 @@ def compute_residuals(
                 residuals["C1"] = max(residuals["C1"], abs(total - q_val))
                 residuals["C11"] = max(residuals["C11"], abs(total - q_val))
 
+    arc_check = arc_flows_raw or arc_flows
     for arc in arcs:
         for t in times:
             expected = 0.0
             for it in itineraries:
                 for group, time_map in flows[it["id"]].items():
-                    expected += inc_road[arc][it["id"]][t] * time_map[t]
-            residuals["C2"] = max(residuals["C2"], abs(arc_flows[arc][t] - expected))
+                    expected += inc_road[arc][it["id"]][t] * time_map.get(t, 0.0)
+            residuals["C2"] = max(residuals["C2"], abs(arc_check[arc][t] - expected))
 
     inflow_total, outflow_total = boundary_flows(arc_flows, boundary_in, boundary_out, times)
     inflow = [val / delta_t for val in inflow_total]
@@ -143,13 +156,17 @@ def compute_residuals(
                 expected_tau = params["tau0"] * g_series[idx] * params.get("theta", 1.0)
                 residuals["C9"] = max(residuals["C9"], abs(tau[arc][t] - expected_tau))
 
-    for station in utilization:
+    utilization_check = utilization_raw or utilization
+    for station in utilization_check:
         for t in times:
             expected_u = 0.0
             for it in itineraries:
                 for group, time_map in flows[it["id"]].items():
-                    expected_u += inc_station.get(station, {}).get(it["id"], {}).get(t, 0.0) * time_map[t]
-            residuals["C10"] = max(residuals["C10"], abs(utilization[station][t] - expected_u))
+                    expected_u += inc_station.get(station, {}).get(it["id"], {}).get(t, 0.0) * time_map.get(t, 0.0)
+            residuals["C10"] = max(
+                residuals["C10"],
+                abs(utilization_check[station][t] - expected_u),
+            )
 
     return residuals
 
@@ -199,6 +216,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     shared_power_residuals: Dict[str, float] | None = None
 
     costs: Dict[str, Dict[int, Dict[str, float]]] = {}
+    x_new = arc_flows
+    u_new = utilization
     for iteration in range(config["max_iter"]):
         last_iteration = iteration + 1
         g_by_time = {t: g_series[min(len(g_series) - 1, idx)] for idx, t in enumerate(times)}
@@ -292,12 +311,14 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         itineraries,
         flows,
         arc_flows,
+        x_new,
         tau,
         n_series,
         g_series,
         inc_road,
         inc_station,
         utilization,
+        u_new,
     )
 
     E, p_ch, y, charging_residuals, B_vt, P_vt, inv_residuals, _ = solve_charging(data, e_dep, d_vt_dep)
@@ -352,12 +373,14 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "y": y,
             "residuals": charging_residuals,
         },
-        "solver_used": LAST_SOLVER_USED,
+        "solver_used": charging.LAST_SOLVER_USED,
     }
     return results, residuals
 
 
 def save_outputs(results: Dict[str, Any], path: str) -> None:
+    import os
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(results, handle, indent=2)
 
@@ -367,8 +390,18 @@ def _resolve_path(path: str, fallback: str) -> str:
 
     if os.path.exists(path):
         return path
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    data_candidate = os.path.join(repo_root, "project", "data", os.path.basename(path))
+    if os.path.exists(data_candidate):
+        return data_candidate
+    schema_candidate = os.path.join(repo_root, "project", os.path.basename(path))
+    if os.path.exists(schema_candidate):
+        return schema_candidate
     if os.path.exists(fallback):
         return fallback
+    candidate = os.path.join(repo_root, fallback)
+    if os.path.exists(candidate):
+        return candidate
     raise FileNotFoundError(f"Could not find data file: {path}")
 
 

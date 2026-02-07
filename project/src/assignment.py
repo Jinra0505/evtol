@@ -130,7 +130,7 @@ def aggregate_arc_flows(
             for seg in it.get("road_arcs", []):
                 arc = seg["arc"]
                 t = seg["t"]
-                arc_flows[arc][t] += seg.get("frac", 1.0) * time_map[t]
+                arc_flows[arc][t] += seg.get("frac", 1.0) * time_map.get(t, 0.0)
     return arc_flows
 
 
@@ -178,7 +178,7 @@ def aggregate_evtol_dep_demand(
         d_dep.setdefault(dep_station, {t: 0.0 for t in times})
         for group, time_map in flows.get(it["id"], {}).items():
             for t in times:
-                d_dep[dep_station][t] += time_map[t]
+                d_dep[dep_station][t] += time_map.get(t, 0.0)
     return d_dep
 
 
@@ -213,7 +213,7 @@ def aggregate_evtol_demand(
         d_route[it_id] = {t: 0.0 for t in times}
         for group, time_map in flows.get(it_id, {}).items():
             for t in times:
-                d_route[it_id][t] += time_map[t]
+                d_route[it_id][t] += time_map.get(t, 0.0)
     return d_route
 
 

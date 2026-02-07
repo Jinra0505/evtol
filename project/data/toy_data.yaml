@@ -5,7 +5,7 @@
   },
   "config": {
     "max_iter": 20,
-    "tol": 1e-06,
+    "tol": 0.01,
     "eps_improve": 0.0001,
     "use_generator": false,
     "K_paths": 3
