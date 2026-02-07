@@ -145,8 +145,8 @@ def aggregate_station_utilization(
             if it.get("mode") == "eVTOL":
                 dep_station = it.get("dep_station")
                 if dep_station is not None:
-                    for t in times:
-                        utilization[dep_station][t] += time_map[t]
+                    for t, val in time_map.items():
+                        utilization[dep_station][t] += val
     return utilization
 
 

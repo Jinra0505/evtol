@@ -1,6 +1,8 @@
 from typing import Any, Dict, Tuple
 import importlib.util
 
+from .assignment import aggregate_ev_energy_demand, aggregate_evtol_demand, compute_evtol_energy_demand
+
 if importlib.util.find_spec("gurobipy") is None:
     raise ImportError(
         "gurobipy is required for charging optimization. Please install Gurobi and set up a license."
@@ -10,8 +12,9 @@ import gurobipy as gp
 from gurobipy import GRB
 
 
-def solve_shared_power_inventory_lp(
+def _solve_shared_power_core(
     data: Dict[str, Any],
+    times: list[int],
     e_dep: Dict[str, Dict[int, float]],
     ev_energy: Dict[str, Dict[int, float]],
 ) -> Tuple[
@@ -22,7 +25,6 @@ def solve_shared_power_inventory_lp(
     Dict[str, Dict[int, float]],
     Dict[str, float],
 ]:
-    times = data["sets"]["time"]
     stations = data["sets"]["stations"]
     delta_t = data["meta"]["delta_t"]
     station_params = data["parameters"]["stations"]
@@ -122,6 +124,41 @@ def solve_shared_power_inventory_lp(
             residuals["INV4"] = max(residuals["INV4"], max(0.0, shed_ev_out[s][t]))
 
     return B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals
+
+
+def solve_shared_power_lp(
+    data: Dict[str, Any],
+    itineraries: list[Dict[str, Any]],
+    flows: Dict[str, Dict[str, Dict[int, float]]],
+    times: list[int],
+) -> Tuple[
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, float],
+]:
+    d_vt_route = aggregate_evtol_demand(flows, itineraries, times)
+    e_dep = compute_evtol_energy_demand(d_vt_route, itineraries, times)
+    ev_energy = aggregate_ev_energy_demand(itineraries, flows, times)
+    return _solve_shared_power_core(data, times, e_dep, ev_energy)
+
+
+def solve_shared_power_inventory_lp(
+    data: Dict[str, Any],
+    e_dep: Dict[str, Dict[int, float]],
+    ev_energy: Dict[str, Dict[int, float]],
+) -> Tuple[
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, Dict[int, float]],
+    Dict[str, float],
+]:
+    times = data["sets"]["time"]
+    return _solve_shared_power_core(data, times, e_dep, ev_energy)
 
 
 def solve_charging(

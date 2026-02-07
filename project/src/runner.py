@@ -12,7 +12,7 @@ from .assignment import (
     compute_itinerary_costs,
     logit_assignment,
 )
-from .charging import solve_charging, solve_shared_power_inventory_lp
+from .charging import solve_charging, solve_shared_power_lp
 from .congestion import compute_road_times, compute_station_waits
 from .data_loader import load_data
 from .itinerary_generator import generate_itineraries
@@ -256,12 +256,16 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
             shed_vt,
             shadow_prices,
             shared_power_residuals,
-        ) = solve_shared_power_inventory_lp(data, e_dep, ev_energy)
+        ) = solve_shared_power_lp(data, itineraries, flows, times)
 
         if shadow_prices:
             for s in stations:
                 for t in times:
+                    base_price = electricity_price[s][t]
+                    cap = base_price * 10.0
                     new_surcharge = max(0.0, shadow_prices.get(s, {}).get(t, 0.0))
+                    if cap > 0.0:
+                        new_surcharge = min(new_surcharge, cap)
                     energy_surcharge[s][t] = (1.0 - phi) * energy_surcharge[s][t] + phi * new_surcharge
 
         if max(dx, dn) < config["tol"]:
@@ -281,6 +285,21 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
     )
 
     E, p_ch, y, charging_residuals, B_vt, P_vt, inv_residuals, _ = solve_charging(data, e_dep, d_vt_dep)
+
+    cap_violation = 0.0
+    cap_pax = data["parameters"].get("vertiport_cap_pax")
+    if cap_pax:
+        for dep, time_map in d_vt_dep.items():
+            for t in times:
+                cap_violation = max(cap_violation, max(0.0, time_map[t] - cap_pax[dep][t]))
+
+    power_violation = 0.0
+    for s in stations:
+        for t in times:
+            total_power = sum(p_ch[m][s][t] for m in data["sets"]["vehicles"])
+            if P_vt and s in P_vt:
+                total_power += P_vt[s][t]
+            power_violation = max(power_violation, max(0.0, total_power - station_params[s]["P_site"][t]))
 
     results = {
         "x": arc_flows,
@@ -302,6 +321,10 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
             "shed_ev": shed_ev,
             "shed_vt": shed_vt,
             "residuals": shared_power_residuals,
+        },
+        "validation": {
+            "cap_violation": cap_violation,
+            "power_violation": power_violation,
         },
         "residuals": residuals,
         "convergence": {"dx": dx, "dn": dn, "iterations": last_iteration},
@@ -331,6 +354,9 @@ def main() -> None:
         "Stations": {"C10": residuals["C10"]},
         "Charging": results["charging"]["residuals"],
         "Inventory": results["inventory"]["residuals"],
+        "Validation": results["validation"],
+        "Surcharge": results["surcharge_power"],
+        "ShadowPrice": results["shadow_price_power"],
     }
     print(json.dumps(report, indent=2))
 
