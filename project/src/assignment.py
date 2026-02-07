@@ -25,8 +25,10 @@ def build_incidence(
         if it.get("mode") == "eVTOL":
             dep_station = it.get("dep_station")
             if dep_station is not None:
+                flight_time = it.get("flight_time", {})
                 for t in times:
-                    inc_station[dep_station][it["id"]][t] += 1.0
+                    if flight_time.get(t, 0.0) > 0.0:
+                        inc_station[dep_station][it["id"]][t] += 1.0
     return inc_road, inc_station
 
 

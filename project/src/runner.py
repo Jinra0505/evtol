@@ -1,3 +1,4 @@
+import copy
 import json
 from typing import Any, Dict, List, Tuple
 
@@ -153,7 +154,12 @@ def compute_residuals(
     return residuals
 
 
-def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float]]:
+def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str, Any], Dict[str, float]]:
+    if overrides:
+        data = copy.deepcopy(data)
+        for key, value in overrides.items():
+            data[key] = value
+
     times = data["sets"]["time"]
     arcs = data["sets"]["arcs"]
     stations = data["sets"]["stations"]
@@ -183,12 +189,14 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
     d_vt_dep: Dict[str, Dict[int, float]] = {}
     e_dep: Dict[str, Dict[int, float]] = {}
     shadow_prices: Dict[str, Dict[int, float]] | None = None
+    raw_surcharge: Dict[str, Dict[int, float]] = {s: {t: 0.0 for t in times} for s in stations}
     shed_ev: Dict[str, Dict[int, float]] | None = None
     shed_vt: Dict[str, Dict[int, float]] | None = None
     P_vt_lp: Dict[str, Dict[int, float]] | None = None
     B_vt_lp: Dict[str, Dict[int, float]] | None = None
     shared_power_residuals: Dict[str, float] | None = None
 
+    costs: Dict[str, Dict[int, Dict[str, float]]] = {}
     for iteration in range(config["max_iter"]):
         last_iteration = iteration + 1
         g_by_time = {t: g_series[min(len(g_series) - 1, idx)] for idx, t in enumerate(times)}
@@ -264,6 +272,7 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
                     base_price = electricity_price[s][t]
                     cap = base_price * 10.0
                     new_surcharge = max(0.0, shadow_prices.get(s, {}).get(t, 0.0))
+                    raw_surcharge[s][t] = new_surcharge
                     if cap > 0.0:
                         new_surcharge = min(new_surcharge, cap)
                     energy_surcharge[s][t] = (1.0 - phi) * energy_surcharge[s][t] + phi * new_surcharge
@@ -309,12 +318,14 @@ def run_equilibrium(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, flo
         "u": utilization,
         "w": waits,
         "f": flows,
+        "costs": costs,
         "d_vt_route": d_vt_route,
         "d_vt_dep": d_vt_dep,
         "e_dep": e_dep,
         "inventory": {"B_vt": B_vt, "P_vt": P_vt, "residuals": inv_residuals},
         "shadow_price_power": shadow_prices,
         "surcharge_power": energy_surcharge,
+        "surcharge_power_raw": raw_surcharge,
         "shared_power": {
             "B_vt": B_vt_lp,
             "P_vt": P_vt_lp,
@@ -344,7 +355,21 @@ def save_outputs(results: Dict[str, Any], path: str) -> None:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--plan", action="store_true", help="Run planning layer search")
+    args = parser.parse_args()
+
     data = load_data("project/data/toy_data.yaml", "project/data_schema.yaml")
+    if args.plan:
+        from .planner import solve_planning
+
+        best_plan, best_cost, best_results = solve_planning(data)
+        save_outputs(best_results, "project/output.json")
+        print(json.dumps({"best_plan": best_plan, "best_cost": best_cost}, indent=2))
+        return
+
     results, residuals = run_equilibrium(data)
     save_outputs(results, "project/output.json")
     report = {
@@ -356,6 +381,7 @@ def main() -> None:
         "Inventory": results["inventory"]["residuals"],
         "Validation": results["validation"],
         "Surcharge": results["surcharge_power"],
+        "SurchargeRaw": results["surcharge_power_raw"],
         "ShadowPrice": results["shadow_price_power"],
     }
     print(json.dumps(report, indent=2))
