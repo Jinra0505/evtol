@@ -10,6 +10,7 @@ def _planning_defaults(data: Dict[str, Any]) -> Dict[str, Any]:
         "delta_p_site": [0.0, 10.0, 20.0],
         "delta_stall": [0, 1, 2],
         "delta_cap_pax": [0.0, 5.0, 10.0],
+        "price_factor": [1.0],
         "cP": 1.0,
         "cS": 5.0,
         "cV": 2.0,
@@ -28,17 +29,20 @@ def generate_candidate_plans(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     p_site_choices = planning["delta_p_site"]
     stall_choices = planning["delta_stall"]
     cap_choices = planning["delta_cap_pax"]
+    price_choices = planning["price_factor"]
 
     plans: List[Dict[str, Any]] = []
     for p_site_delta in itertools.product(p_site_choices, repeat=len(stations)):
         for stall_delta in itertools.product(stall_choices, repeat=len(stations)):
             for cap_delta in itertools.product(cap_choices, repeat=len(cap_pax)):
-                plan = {
-                    "delta_p_site": dict(zip(stations, p_site_delta)),
-                    "delta_stall": dict(zip(stations, stall_delta)),
-                    "delta_cap_pax": dict(zip(cap_pax.keys(), cap_delta)),
-                }
-                plans.append(plan)
+                for price_factor in price_choices:
+                    plan = {
+                        "delta_p_site": dict(zip(stations, p_site_delta)),
+                        "delta_stall": dict(zip(stations, stall_delta)),
+                        "delta_cap_pax": dict(zip(cap_pax.keys(), cap_delta)),
+                        "price_factor": price_factor,
+                    }
+                    plans.append(plan)
     return plans
 
 
@@ -51,6 +55,7 @@ def apply_plan_to_data(data: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, 
     delta_p_site = plan.get("delta_p_site", {})
     delta_stall = plan.get("delta_stall", {})
     delta_cap_pax = plan.get("delta_cap_pax", {})
+    price_factor = plan.get("price_factor", 1.0)
 
     for s in stations:
         if s in delta_p_site:
@@ -63,6 +68,11 @@ def apply_plan_to_data(data: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, 
         for dep, time_map in params["vertiport_cap_pax"].items():
             for t in times:
                 time_map[t] += delta_cap_pax.get(dep, 0.0)
+
+    if price_factor != 1.0:
+        for s in stations:
+            for t in times:
+                params["electricity_price"][s][t] *= price_factor
 
     return data_copy
 
@@ -84,15 +94,16 @@ def evaluate_plan(data: Dict[str, Any], plan: Dict[str, Any]) -> Tuple[float, Di
 
     energy_cost = 0.0
     prices = data_copy["parameters"]["electricity_price"]
+    surcharge = results["surcharge_power"]
     delta_t = data_copy["meta"]["delta_t"]
     for m, station_map in results["charging"]["p_ch"].items():
         for s, time_map in station_map.items():
             for t, power in time_map.items():
-                energy_cost += prices[s][t] * power * delta_t
+                energy_cost += (prices[s][t] + surcharge[s][t]) * power * delta_t
     if results["inventory"]["P_vt"]:
         for dep, time_map in results["inventory"]["P_vt"].items():
             for t, power in time_map.items():
-                energy_cost += prices[dep][t] * power * delta_t
+                energy_cost += (prices[dep][t] + surcharge[dep][t]) * power * delta_t
 
     shed_penalty = planning["shed_penalty"]
     shed_cost = 0.0
@@ -122,6 +133,7 @@ def evaluate_plan(data: Dict[str, Any], plan: Dict[str, Any]) -> Tuple[float, Di
         "energy_cost": energy_cost,
         "shed_cost": shed_cost,
         "invest_cost": invest_cost,
+        "total_cost": total_cost,
         "cap_violation": results["validation"]["cap_violation"],
         "power_violation": results["validation"]["power_violation"],
         "residuals": residuals,
@@ -143,6 +155,7 @@ def solve_planning(data: Dict[str, Any]) -> Tuple[Dict[str, Any], float, Dict[st
             tuple(sorted(plan["delta_p_site"].items())),
             tuple(sorted(plan["delta_stall"].items())),
             tuple(sorted(plan["delta_cap_pax"].items())),
+            plan.get("price_factor", 1.0),
         )
         if key in cache:
             cost, diag, results = cache[key]
