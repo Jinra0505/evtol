@@ -199,6 +199,23 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     )
     g_series = compute_g(n_series, data["parameters"]["mfd"])
     energy_surcharge = {s: {t: 0.0 for t in times} for s in stations}
+    min_iters = int(config.get("min_iters", 10))
+    patience = int(config.get("patience", 5))
+    stop_reason = "max_iters"
+    dprice = 0.0
+    peak_t = 5 if 5 in times else times[-1]
+    demand_keys = list(data["parameters"]["q"].keys())
+    representative_od = config.get("representative_od")
+    if not representative_od:
+        representative_od = "A-B" if "A-B" in demand_keys else (demand_keys[0] if demand_keys else "")
+    diagnostics = {
+        "dx_history": [],
+        "dprice_history": [],
+        "max_surcharge_history": [],
+        "price_snapshots": [],
+        "mode_share": [],
+        "surcharge_history": [],
+    }
 
     dx = 0.0
     dn = 0.0
@@ -218,6 +235,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     costs: Dict[str, Dict[int, Dict[str, float]]] = {}
     x_new = arc_flows
     u_new = utilization
+    good_count = 0
     for iteration in range(config["max_iter"]):
         last_iteration = iteration + 1
         g_by_time = {t: g_series[min(len(g_series) - 1, idx)] for idx, t in enumerate(times)}
@@ -263,7 +281,11 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         x_new = _fill_missing(x_new, arcs, times)
         u_new = _fill_missing(u_new, stations, times)
 
-        dx = max(abs(x_new[a][t] - arc_flows[a][t]) for a in arcs for t in times)
+        dx_abs = max(abs(x_new[a][t] - arc_flows[a][t]) for a in arcs for t in times)
+        max_flow = max(
+            max(abs(x_new[a][t]), abs(arc_flows[a][t])) for a in arcs for t in times
+        )
+        dx = dx_abs / max(1.0, max_flow)
 
         phi = 1.0 / (iteration + 1.0)
         for a in arcs:
@@ -292,19 +314,101 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             shared_power_residuals,
         ) = solve_shared_power_lp(data, itineraries, flows, times)
 
+        prev_surcharge = {s: {t: energy_surcharge[s][t] for t in times} for s in stations}
+        alpha_override = config.get("surcharge_msa_alpha")
+        alpha = float(alpha_override) if alpha_override is not None else 1.0 / (iteration + 1.0)
         if shadow_prices:
             for s in stations:
                 for t in times:
                     base_price = electricity_price[s][t]
                     cap = base_price * 10.0
-                    new_surcharge = max(0.0, shadow_prices.get(s, {}).get(t, 0.0))
+                    shadow_scale = float(config.get("surcharge_kappa", 1.0))
+                    new_surcharge = max(0.0, shadow_scale * shadow_prices.get(s, {}).get(t, 0.0))
                     raw_surcharge[s][t] = new_surcharge
                     if cap > 0.0:
                         new_surcharge = min(new_surcharge, cap)
-                    energy_surcharge[s][t] = (1.0 - phi) * energy_surcharge[s][t] + phi * new_surcharge
+                    energy_surcharge[s][t] = (1.0 - alpha) * energy_surcharge[s][t] + alpha * new_surcharge
 
-        if max(dx, dn) < config["tol"]:
-            break
+        dprice = max(
+            abs(energy_surcharge[s][t] - prev_surcharge[s][t]) for s in stations for t in times
+        )
+        max_surcharge = max(energy_surcharge[s][t] for s in stations for t in times)
+        diagnostics["dx_history"].append(dx)
+        diagnostics["dprice_history"].append(dprice)
+        diagnostics["max_surcharge_history"].append(max_surcharge)
+
+        snapshot = {
+            "iteration": iteration + 1,
+            "t": peak_t,
+            "stations": {},
+        }
+        for s in stations[:3]:
+            base_price = electricity_price[s][peak_t]
+            surcharge = energy_surcharge[s][peak_t]
+            snapshot["stations"][s] = {
+                "base_price": base_price,
+                "surcharge": surcharge,
+                "effective_price": base_price + surcharge,
+            }
+        diagnostics["price_snapshots"].append(snapshot)
+
+        ev_total = 0.0
+        vt_total = 0.0
+        if representative_od:
+            for it in itineraries:
+                if f"{it['od'][0]}-{it['od'][1]}" != representative_od:
+                    continue
+                for group, time_map in flows[it["id"]].items():
+                    val = time_map.get(peak_t, 0.0)
+                    if it.get("mode") == "eVTOL":
+                        vt_total += val
+                    else:
+                        ev_total += val
+        total_flow = ev_total + vt_total
+        ev_share = ev_total / total_flow if total_flow > 0.0 else 0.0
+        vt_share = vt_total / total_flow if total_flow > 0.0 else 0.0
+        diagnostics["mode_share"].append(
+            {
+                "iteration": iteration + 1,
+                "od": representative_od,
+                "t": peak_t,
+                "ev_share": ev_share,
+                "vt_share": vt_share,
+            }
+        )
+        diagnostics["surcharge_history"].append(
+            {
+                "iteration": iteration + 1,
+                "surcharge": {s: {t: energy_surcharge[s][t] for t in times} for s in stations},
+            }
+        )
+        if len(diagnostics["surcharge_history"]) > 20:
+            diagnostics["surcharge_history"] = diagnostics["surcharge_history"][-20:]
+
+        print(
+            "iter="
+            f"{iteration + 1} dx={dx:.6f} dn={dn:.6f} dprice={dprice:.6f} "
+            f"max_surcharge={max_surcharge:.6f} alpha={alpha:.3f}"
+        )
+        if snapshot["stations"]:
+            station_repr = ", ".join(
+                f"{s}:base={vals['base_price']:.3f},sur={vals['surcharge']:.3f},eff={vals['effective_price']:.3f}"
+                for s, vals in snapshot["stations"].items()
+            )
+            print(f"peak_t={peak_t} prices [{station_repr}]")
+        if representative_od:
+            print(
+                f"peak_t={peak_t} od={representative_od} ev_share={ev_share:.3f} vt_share={vt_share:.3f}"
+            )
+
+        if iteration + 1 >= min_iters:
+            if max(dx, dn, dprice) < config["tol"]:
+                good_count += 1
+            else:
+                good_count = 0
+            if good_count >= patience:
+                stop_reason = "patience"
+                break
 
     residuals = compute_residuals(
         data,
@@ -366,7 +470,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "power_violation": power_violation,
         },
         "residuals": residuals,
-        "convergence": {"dx": dx, "dn": dn, "iterations": last_iteration},
+        "convergence": {"dx": dx, "dn": dn, "dprice": dprice, "iterations": last_iteration},
+        "diagnostics": {**diagnostics, "stop_reason": stop_reason},
         "charging": {
             "E": E,
             "p_ch": p_ch,

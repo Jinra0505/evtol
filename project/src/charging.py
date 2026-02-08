@@ -145,8 +145,8 @@ def _solve_shared_power_core_heuristic(
     stations = data["sets"]["stations"]
     delta_t = data["meta"]["delta_t"]
     station_params = data["parameters"]["stations"]
-    prices = data["parameters"]["electricity_price"]
     storage_params = data["parameters"].get("vertiport_storage")
+    kappa = float(data.get("config", {}).get("shadow_kappa", 2.0))
 
     if storage_params is None and e_dep:
         raise ValueError("Missing required key path: parameters.vertiport_storage")
@@ -166,6 +166,17 @@ def _solve_shared_power_core_heuristic(
                 shed_ev_out[s][t] = -available
                 available = 0.0
             available_power[s][t] = available
+
+    for s in stations:
+        for t in times:
+            p_ev_req = ev_energy.get(s, {}).get(t, 0.0) / delta_t
+            p_vt_req = 0.0
+            if s in e_dep:
+                eta = storage_params[s]["eta_ch"]
+                p_vt_req = max(0.0, e_dep[s][t] / (eta * delta_t)) if eta > 0 else 0.0
+            slack = station_params[s]["P_site"][t] - (p_ev_req + p_vt_req)
+            if slack < 0.0 and station_params[s]["P_site"][t] > 0.0:
+                shadow_prices[s][t] = kappa * (-slack / station_params[s]["P_site"][t])
 
     for dep in e_dep:
         B_out[dep][times[0]] = storage_params[dep]["B_init"]
