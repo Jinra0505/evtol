@@ -1,8 +1,11 @@
 import json
 import os
 import sys
+<<<<<<< codex/implement-multi-time-traffic-equilibrium-model-25bt3w
 from contextlib import redirect_stdout
 from io import StringIO
+=======
+>>>>>>> main
 from pathlib import Path
 
 if __package__ is None:
@@ -120,6 +123,7 @@ def _check_convergence(data: dict, results: dict) -> None:
     tol = float(data["config"]["tol"])
     dx = results["convergence"]["dx"]
     dn = results["convergence"]["dn"]
+<<<<<<< codex/implement-multi-time-traffic-equilibrium-model-25bt3w
     dprice = results["convergence"].get("dprice", 0.0)
     max_iter = int(data["config"]["max_iter"])
     if results["convergence"]["iterations"] < max_iter and max(dx, dn, dprice) > tol:
@@ -180,11 +184,24 @@ def run_case(data_path: str, schema_path: str, suppress_output: bool = False) ->
     if "complex_case" in os.path.basename(data_path):
         _check_stop_reason(results)
         _check_mode_share_shift(results, min_shift=0.01)
+=======
+    if max(dx, dn) > tol:
+        raise AssertionError(f"Convergence tolerance not met: dx={dx}, dn={dn}, tol={tol}")
+
+
+def run_case(data_path: str, schema_path: str) -> dict:
+    data = load_data(data_path, schema_path)
+    results, residuals = run_equilibrium(data)
+    _check_convergence(data, results)
+    _check_availability(data, results)
+    _check_constraints(data, results)
+>>>>>>> main
     if not HAS_GUROBI and results["solver_used"] != "pulp":
         raise AssertionError(f"Solver fallback mismatch: {results['solver_used']}")
     return {"results": results, "residuals": residuals}
 
 
+<<<<<<< codex/implement-multi-time-traffic-equilibrium-model-25bt3w
 def run_planner(data_path: str, schema_path: str, suppress_output: bool = False) -> dict:
     data = load_data(data_path, schema_path)
     if suppress_output:
@@ -193,15 +210,23 @@ def run_planner(data_path: str, schema_path: str, suppress_output: bool = False)
             best_plan, best_cost, best_results, best_diag = solve_planning(data)
     else:
         best_plan, best_cost, best_results, best_diag = solve_planning(data)
+=======
+def run_planner(data_path: str, schema_path: str) -> dict:
+    data = load_data(data_path, schema_path)
+    best_plan, best_cost, best_results, best_diag = solve_planning(data)
+>>>>>>> main
     data_plan = apply_plan_to_data(data, best_plan)
     _check_convergence(data_plan, best_results)
     _check_availability(data_plan, best_results)
     _check_constraints(data_plan, best_results)
     _check_planner_objective(data_plan, best_results, best_diag)
+<<<<<<< codex/implement-multi-time-traffic-equilibrium-model-25bt3w
     _check_price_feedback(data_plan, best_results, require_nonzero="complex_case" in os.path.basename(data_path))
     if "complex_case" in os.path.basename(data_path):
         _check_stop_reason(best_results)
         _check_mode_share_shift(best_results, min_shift=0.01)
+=======
+>>>>>>> main
     if not HAS_GUROBI and best_results["solver_used"] != "pulp":
         raise AssertionError(f"Solver fallback mismatch: {best_results['solver_used']}")
     return {
@@ -212,6 +237,7 @@ def run_planner(data_path: str, schema_path: str, suppress_output: bool = False)
 
 
 def main() -> None:
+<<<<<<< codex/implement-multi-time-traffic-equilibrium-model-25bt3w
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -251,6 +277,12 @@ def main() -> None:
         return
 
     data_path = _resolve_path("toy_data.yaml", str(repo_root / "data" / "toy_data.yaml"))
+=======
+    repo_root = Path(__file__).resolve().parents[1]
+    data_path = _resolve_path("toy_data.yaml", str(repo_root / "data" / "toy_data.yaml"))
+    schema_path = _resolve_path("data_schema.yaml", str(repo_root / "data_schema.yaml"))
+
+>>>>>>> main
     toy_eq = run_case(data_path, schema_path)
     toy_plan = run_planner(data_path, schema_path)
 
