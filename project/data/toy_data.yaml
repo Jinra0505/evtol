@@ -4,11 +4,15 @@
     "delta_t": 1.0
   },
   "config": {
-    "max_iter": 20,
-    "tol": 0.01,
+    "max_iter": 40,
+    "tol": 0.02,
     "eps_improve": 0.0001,
     "use_generator": false,
-    "K_paths": 3
+    "K_paths": 3,
+    "min_iters": 10,
+    "patience": 3,
+    "surcharge_msa_alpha": 0.2,
+    "representative_od": "A-B"
   },
   "sets": {
     "time": [
@@ -16,7 +20,9 @@
       2
     ],
     "vot_groups": [
-      "k1"
+      "low",
+      "mid",
+      "high"
     ],
     "od_pairs": [
       [
@@ -35,25 +41,48 @@
     ],
     "vehicles": [
       "m1"
+    ],
+    "groups": [
+      "low",
+      "mid",
+      "high"
     ]
   },
   "parameters": {
     "q": {
       "A-B": {
-        "k1": {
-          "1": 10.0,
+        "low": {
+          "1": 16.0,
+          "2": 14.0
+        },
+        "mid": {
+          "1": 12.0,
+          "2": 10.0
+        },
+        "high": {
+          "1": 8.0,
           "2": 8.0
         }
       }
     },
     "VOT": {
-      "k1": {
-        "1": 10.0,
-        "2": 10.0
+      "low": {
+        "1": 6.0,
+        "2": 6.0
+      },
+      "mid": {
+        "1": 12.0,
+        "2": 12.0
+      },
+      "high": {
+        "1": 24.0,
+        "2": 24.0
       }
     },
     "lambda": {
-      "k1": 0.1
+      "low": 0.2,
+      "mid": 0.3,
+      "high": 0.4
     },
     "arcs": {
       "a_g1": {
@@ -106,8 +135,8 @@
         "cap_stall": 5.0,
         "w0": 2.0,
         "P_site": {
-          "1": 50.0,
-          "2": 50.0
+          "1": 8.0,
+          "2": 8.0
         }
       }
     },
@@ -151,8 +180,8 @@
     },
     "vertiport_cap_pax": {
       "s1": {
-        "1": 20.0,
-        "2": 20.0
+        "1": 0.0,
+        "2": 40.0
       }
     }
   },
@@ -200,7 +229,7 @@
         {
           "station": "s1",
           "t": 1,
-          "energy": 2.0
+          "energy": 1.6
         }
       ],
       "money": 1.0,
@@ -218,14 +247,14 @@
       "mode": "eVTOL",
       "road_arcs": [],
       "stations": [],
-      "money": 5.0,
+      "money": 8.0,
       "flight_time": {
-        "1": 0.5,
-        "2": 0.5
+        "1": 0.0,
+        "2": 0.6
       },
       "dep_station": "s1",
-      "e_per_pax": 1.0,
-      "phi_energy_markup": 1.0
+      "e_per_pax": 1.4,
+      "phi_energy_markup": 0.0
     }
   ]
 }

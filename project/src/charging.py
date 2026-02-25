@@ -12,6 +12,56 @@ except ImportError:
 LAST_SOLVER_USED = "unknown"
 
 
+def compute_station_loads_from_flows(
+    data: Dict[str, Any],
+    itineraries: list[Dict[str, Any]],
+    flows: Dict[str, Dict[str, Dict[int, float]]],
+    times: list[int],
+) -> Dict[str, Dict[str, Dict[int, float]]]:
+    """Aggregate EV/eVTOL station loads directly from itinerary flows.
+
+    Returns a dictionary with:
+    - E_ev_req[s][t], P_ev_req[s][t]
+    - E_vt_req[s][t], P_vt_req[s][t]
+    - P_total_req[s][t]
+    """
+    stations = data["sets"]["stations"]
+    delta_t = float(data["meta"]["delta_t"])
+    station_params = data["parameters"]["stations"]
+
+    d_vt_route = aggregate_evtol_demand(flows, itineraries, times)
+    e_vt_dep = compute_evtol_energy_demand(d_vt_route, itineraries, times)
+    e_ev_station = aggregate_ev_energy_demand(itineraries, flows, times)
+
+    E_ev_req = {s: {t: 0.0 for t in times} for s in stations}
+    E_vt_req = {s: {t: 0.0 for t in times} for s in stations}
+    P_ev_req = {s: {t: 0.0 for t in times} for s in stations}
+    P_vt_req = {s: {t: 0.0 for t in times} for s in stations}
+    P_total_req = {s: {t: 0.0 for t in times} for s in stations}
+
+    for s in stations:
+        for t in times:
+            E_ev_req[s][t] = float(e_ev_station.get(s, {}).get(t, 0.0))
+            E_vt_req[s][t] = float(e_vt_dep.get(s, {}).get(t, 0.0))
+            P_ev_req[s][t] = E_ev_req[s][t] / delta_t if delta_t > 0 else 0.0
+            eta = 1.0
+            if s in data["parameters"].get("vertiport_storage", {}):
+                eta = max(1e-6, float(data["parameters"]["vertiport_storage"][s].get("eta_ch", 1.0)))
+            P_vt_req[s][t] = E_vt_req[s][t] / (eta * delta_t) if delta_t > 0 else 0.0
+            # Hard safety: if site has no power capability keep req tracked but bounded for diagnostics.
+            if float(station_params[s]["P_site"][t]) <= 0.0:
+                P_vt_req[s][t] = 0.0
+            P_total_req[s][t] = P_ev_req[s][t] + P_vt_req[s][t]
+
+    return {
+        "E_ev_req": E_ev_req,
+        "E_vt_req": E_vt_req,
+        "P_ev_req": P_ev_req,
+        "P_vt_req": P_vt_req,
+        "P_total_req": P_total_req,
+    }
+
+
 def _solve_shared_power_core(
     data: Dict[str, Any],
     times: list[int],
