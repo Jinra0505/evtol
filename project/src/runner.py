@@ -636,6 +636,10 @@ def main() -> None:
     if cbd_tau:
         first_arc = next(iter(cbd_tau.keys()))
         cbd_tau_one = {first_arc: cbd_tau[first_arc]}
+    peak_snapshot = results["diagnostics"].get("price_snapshots", [])
+    peak_prices_last = peak_snapshot[-1] if peak_snapshot else {}
+    mode_share_last = results["diagnostics"].get("mode_share_by_group", [])
+    mode_share_last = mode_share_last[-1] if mode_share_last else {}
     report = {
         "equilibrium": {
             "C1": residuals["C1"],
@@ -649,16 +653,37 @@ def main() -> None:
         "Surcharge": results["surcharge_power"],
         "Diagnostics": {
             "stop_reason": results["diagnostics"].get("stop_reason"),
+            "iter_count": results["convergence"].get("iterations"),
+            "dx_end": results["convergence"].get("dx"),
+            "dn_end": results["convergence"].get("dn"),
             "dprice_start": dprice_hist[0] if dprice_hist else None,
             "dprice_end": dprice_hist[-1] if dprice_hist else None,
             "max_surcharge": max_surcharge,
-            "mode_share_by_group_last": results["diagnostics"].get("mode_share_by_group", [])[-1] if results["diagnostics"].get("mode_share_by_group") else {},
+            "peak_t": peak_prices_last.get("t"),
+            "peak_prices": peak_prices_last.get("stations", {}),
+            "mode_share_by_group_last": mode_share_last,
             "power_tightness": results["diagnostics"].get("power_tightness", {}),
+            "boundary_inflow": results["diagnostics"].get("boundary_inflow"),
+            "boundary_outflow": results["diagnostics"].get("boundary_outflow"),
             "n_series": results["diagnostics"].get("n_series"),
             "g_series": results["diagnostics"].get("g_series"),
             "cbd_tau": cbd_tau_one,
         },
     }
+    g_vals = list((results["diagnostics"].get("g_series") or {}).values())
+    g_range = (max(g_vals) - min(g_vals)) if g_vals else 0.0
+    high_vt_share = (
+        mode_share_last.get("shares", {}).get("high", {}).get("vt")
+        if isinstance(mode_share_last, dict)
+        else None
+    )
+    print(
+        "论文摘要: "
+        f"收敛于 iter={results['convergence'].get('iterations')}；"
+        f"峰值 surcharge={max_surcharge:.4f}；"
+        f"高VoT@peak_t 的 eVTOL share={0.0 if high_vt_share is None else high_vt_share:.4f}；"
+        f"CBD g(t) 变化范围={g_range:.6f}"
+    )
     print(json.dumps(report, indent=2))
 
 

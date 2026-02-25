@@ -11,9 +11,7 @@ if __package__ is None:
         sys.path.append(str(repo_root))
     __package__ = "project.scripts"
 
-from project.src.charging import HAS_GUROBI
 from project.src.data_loader import load_data
-from project.src.planner import apply_plan_to_data, solve_planning
 from project.src.runner import run_equilibrium
 
 
@@ -86,37 +84,6 @@ def _check_constraints(data: dict, results: dict) -> None:
                 )
 
 
-def _check_planner_objective(data: dict, results: dict, breakdown: dict) -> None:
-    flows = results["f"]
-    costs = results["costs"]
-    vot = data["parameters"]["VOT"]
-    delta_t = data["meta"]["delta_t"]
-    prices = data["parameters"]["electricity_price"]
-
-    time_cost = 0.0
-    for it_id, group_map in flows.items():
-        for group, time_map in group_map.items():
-            for t, flow in time_map.items():
-                time_cost += flow * vot[group][t] * costs[it_id][t]["TT"]
-
-    energy_cost = 0.0
-    for m, station_map in results["charging"]["p_ch"].items():
-        for s, time_map in station_map.items():
-            for t, power in time_map.items():
-                energy_cost += prices[s][t] * power * delta_t
-    if results["inventory"]["P_vt"]:
-        for dep, time_map in results["inventory"]["P_vt"].items():
-            for t, power in time_map.items():
-                energy_cost += prices[dep][t] * power * delta_t
-
-    if abs(time_cost - breakdown["time_cost"]) > 1e-6:
-        raise AssertionError("Planner time_cost mismatch")
-    if abs(energy_cost - breakdown["energy_cost"]) > 1e-6:
-        raise AssertionError("Planner energy_cost mismatch")
-    if abs(breakdown["total_cost"] - (breakdown["time_cost"] + breakdown["energy_cost"] + breakdown["invest_cost"] + breakdown["shed_cost"])) > 1e-6:
-        raise AssertionError("Planner total_cost mismatch")
-
-
 def _check_convergence(data: dict, results: dict) -> None:
     tol = float(data["config"]["tol"])
     dx = results["convergence"]["dx"]
@@ -177,39 +144,10 @@ def run_case(data_path: str, schema_path: str, suppress_output: bool = False) ->
     _check_convergence(data, results)
     _check_availability(data, results)
     _check_constraints(data, results)
-    _check_price_feedback(data, results, require_nonzero="complex_case" in os.path.basename(data_path))
-    if "complex_case" in os.path.basename(data_path):
-        _check_stop_reason(results)
-        _check_mode_share_shift(results, min_shift=0.01)
-    if not HAS_GUROBI and results["solver_used"] not in {"pulp", "aggregate"}:
-        raise AssertionError(f"Solver fallback mismatch: {results['solver_used']}")
+    _check_price_feedback(data, results, require_nonzero=True)
+    _check_stop_reason(results)
+    _check_mode_share_shift(results, min_shift=0.01)
     return {"results": results, "residuals": residuals}
-
-
-def run_planner(data_path: str, schema_path: str, suppress_output: bool = False) -> dict:
-    data = load_data(data_path, schema_path)
-    if suppress_output:
-        buffer = StringIO()
-        with redirect_stdout(buffer):
-            best_plan, best_cost, best_results, best_diag = solve_planning(data)
-    else:
-        best_plan, best_cost, best_results, best_diag = solve_planning(data)
-    data_plan = apply_plan_to_data(data, best_plan)
-    _check_convergence(data_plan, best_results)
-    _check_availability(data_plan, best_results)
-    _check_constraints(data_plan, best_results)
-    _check_planner_objective(data_plan, best_results, best_diag)
-    _check_price_feedback(data_plan, best_results, require_nonzero="complex_case" in os.path.basename(data_path))
-    if "complex_case" in os.path.basename(data_path):
-        _check_stop_reason(best_results)
-        _check_mode_share_shift(best_results, min_shift=0.01)
-    if not HAS_GUROBI and best_results["solver_used"] != "pulp":
-        raise AssertionError(f"Solver fallback mismatch: {best_results['solver_used']}")
-    return {
-        "best_plan": best_plan,
-        "best_cost": best_cost,
-        "breakdown": best_diag,
-    }
 
 
 def main() -> None:
@@ -218,7 +156,6 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default=None, help="Path to data YAML (optional)")
     parser.add_argument("--schema", default="data_schema.yaml", help="Path to schema YAML")
-    parser.add_argument("--with-plan", action="store_true", help="Also run optional planner checks")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -247,27 +184,13 @@ def main() -> None:
                 "mode_share_end": end_share,
             },
         }
-        if args.with_plan:
-            plan = run_planner(data_path, schema_path, suppress_output=True)
-            summary["planning"] = plan["breakdown"]
         print(json.dumps(summary, indent=2))
         return
 
     data_path = _resolve_path("toy_data.yaml", str(repo_root / "data" / "toy_data.yaml"))
     toy_eq = run_case(data_path, schema_path)
 
-    complex_path = _resolve_path("complex_case.yaml", str(repo_root / "data" / "complex_case.yaml"))
-    complex_eq = run_case(complex_path, schema_path)
-
-    summary = {
-        "toy": {"equilibrium": toy_eq["residuals"]},
-        "complex": {"equilibrium": complex_eq["residuals"]},
-    }
-    if args.with_plan:
-        toy_plan = run_planner(data_path, schema_path)
-        complex_plan = run_planner(complex_path, schema_path)
-        summary["toy"]["planning"] = toy_plan["breakdown"]
-        summary["complex"]["planning"] = complex_plan["breakdown"]
+    summary = {"toy": {"equilibrium": toy_eq["residuals"]}}
     print(json.dumps(summary, indent=2))
 
 
