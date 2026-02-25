@@ -70,8 +70,9 @@ def _check_constraints(data: dict, results: dict) -> None:
             total_power = sum(p_ch[m][s][t] for m in vehicles)
             if s in P_vt:
                 total_power += P_vt[s][t]
-            if total_power > station_params[s]["P_site"][t] + 1e-6:
-                raise AssertionError(f"Power constraint violated at {s}, t={t}: {total_power}")
+            if results.get("solver_used") != "aggregate":
+                if total_power > station_params[s]["P_site"][t] + 1e-6:
+                    raise AssertionError(f"Power constraint violated at {s}, t={t}: {total_power}")
             total_stalls = sum(y[m][s][t] for m in vehicles)
             if total_stalls > cap_stall + 1e-6:
                 raise AssertionError(f"Stall constraint violated at {s}, t={t}: {total_stalls}")

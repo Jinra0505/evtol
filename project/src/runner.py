@@ -216,6 +216,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "mode_share": [],
         "surcharge_history": [],
         "mode_share_by_group": [],
+        "power_tightness": {},
     }
 
     dx = 0.0
@@ -328,6 +329,12 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     shared_power_residuals["INV3"],
                     max(0.0, p_ev_req[s][t] + p_vt_req[s][t] - p_site),
                 )
+                diagnostics["power_tightness"].setdefault(s, {})[t] = {
+                    "P_ev_req": p_ev_req[s][t],
+                    "P_vt_req": p_vt_req[s][t],
+                    "P_site": p_site,
+                    "ratio": util_power,
+                }
 
         prev_surcharge = {s: {t: energy_surcharge[s][t] for t in times} for s in stations}
         alpha_override = config.get("surcharge_msa_alpha")
@@ -386,7 +393,20 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         mode_share_by_group = {}
         if representative_od:
             rep_its = [it for it in itineraries if f"{it['od'][0]}-{it['od'][1]}" == representative_od]
-            for grp in data["sets"].get("groups", []):
+            groups_in_flows = sorted(
+                {
+                    grp
+                    for it in rep_its
+                    for grp in flows.get(it["id"], {}).keys()
+                }
+            )
+            if not groups_in_flows:
+                flow_keys = {it_id: list(group_map.keys()) for it_id, group_map in flows.items()}
+                raise ValueError(
+                    f"No group keys found in flows for OD {representative_od}. "
+                    f"Representative itineraries={[it['id'] for it in rep_its]}, flow keys={flow_keys}"
+                )
+            for grp in groups_in_flows:
                 ev_g = 0.0
                 vt_g = 0.0
                 for it in rep_its:
@@ -396,7 +416,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     else:
                         ev_g += val
                 den = max(1e-12, ev_g + vt_g)
-                mode_share_by_group[grp] = {"ev_share": ev_g / den, "vt_share": vt_g / den}
+                mode_share_by_group[grp] = {"ev": ev_g / den, "vt": vt_g / den}
         diagnostics["mode_share_by_group"].append(
             {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": mode_share_by_group}
         )
@@ -409,21 +429,23 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         if len(diagnostics["surcharge_history"]) > 20:
             diagnostics["surcharge_history"] = diagnostics["surcharge_history"][-20:]
 
-        print(
-            "iter="
-            f"{iteration + 1} dx={dx:.6f} dn={dn:.6f} dprice={dprice:.6f} "
-            f"max_surcharge={max_surcharge:.6f} alpha={alpha:.3f}"
-        )
-        if snapshot["stations"]:
-            station_repr = ", ".join(
-                f"{s}:base={vals['base_price']:.3f},sur={vals['surcharge']:.3f},eff={vals['effective_price']:.3f}"
-                for s, vals in snapshot["stations"].items()
-            )
-            print(f"peak_t={peak_t} prices [{station_repr}]")
-        if representative_od:
+        should_print = (iteration == 0) or ((iteration + 1) % 5 == 0)
+        if should_print:
             print(
-                f"peak_t={peak_t} od={representative_od} ev_share={ev_share:.3f} vt_share={vt_share:.3f}"
+                "iter="
+                f"{iteration + 1} dx={dx:.6f} dn={dn:.6f} dprice={dprice:.6f} "
+                f"max_surcharge={max_surcharge:.6f} alpha={alpha:.3f}"
             )
+            if "s1" in snapshot["stations"]:
+                vals = snapshot["stations"]["s1"]
+                print(
+                    f"peak_t={peak_t} s1_eff_price={vals['effective_price']:.3f} "
+                    f"(base={vals['base_price']:.3f},sur={vals['surcharge']:.3f})"
+                )
+            if representative_od:
+                print(
+                    f"peak_t={peak_t} od={representative_od} ev_share={ev_share:.3f} vt_share={vt_share:.3f}"
+                )
 
         if iteration + 1 >= min_iters:
             if max(dx, dn, dprice) < config["tol"]:
@@ -431,6 +453,22 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             else:
                 good_count = 0
             if good_count >= patience:
+                if not should_print:
+                    print(
+                        "iter="
+                        f"{iteration + 1} dx={dx:.6f} dn={dn:.6f} dprice={dprice:.6f} "
+                        f"max_surcharge={max_surcharge:.6f} alpha={alpha:.3f}"
+                    )
+                    if "s1" in snapshot["stations"]:
+                        vals = snapshot["stations"]["s1"]
+                        print(
+                            f"peak_t={peak_t} s1_eff_price={vals['effective_price']:.3f} "
+                            f"(base={vals['base_price']:.3f},sur={vals['surcharge']:.3f})"
+                        )
+                    if representative_od:
+                        print(
+                            f"peak_t={peak_t} od={representative_od} ev_share={ev_share:.3f} vt_share={vt_share:.3f}"
+                        )
                 stop_reason = "patience"
                 break
 
@@ -481,11 +519,15 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     inflow_total, outflow_total = boundary_flows(
         arc_flows, data["parameters"]["boundary_in"], data["parameters"]["boundary_out"], times
     )
-    cbd_tau = {
-        arc: {t: tau[arc][t] for t in times}
-        for arc, params in arc_params.items()
-        if params.get("type") == "CBD"
-    }
+    cbd_tau = {}
+    for arc, params in arc_params.items():
+        if params.get("type") != "CBD":
+            continue
+        theta = float(params.get("theta", 1.0))
+        cbd_tau[arc] = {}
+        for idx, t in enumerate(times):
+            g_t = g_series[min(idx + 1, len(g_series) - 1)]
+            cbd_tau[arc][t] = float(params["tau0"]) * g_t * theta
 
     results = {
         "x": arc_flows,
@@ -587,26 +629,34 @@ def main() -> None:
 
     results, residuals = run_equilibrium(data, run_dispatch=args.dispatch)
     save_outputs(results, "project/output.json")
+    dprice_hist = results["diagnostics"].get("dprice_history", [])
+    max_surcharge = max(v for m in results["surcharge_power"].values() for v in m.values())
+    cbd_tau = results["diagnostics"].get("cbd_tau", {})
+    cbd_tau_one = {}
+    if cbd_tau:
+        first_arc = next(iter(cbd_tau.keys()))
+        cbd_tau_one = {first_arc: cbd_tau[first_arc]}
     report = {
-        "Traffic": {"C1": residuals["C1"], "C2": residuals["C2"]},
-        "CBD": {"C7": residuals["C7"], "C8": residuals["C8"], "C9": residuals["C9"]},
-        "Choice": {"C11": residuals["C11"]},
-        "Stations": {"C10": residuals["C10"]},
-        "Charging": results["charging"]["residuals"],
-        "Inventory": results["inventory"]["residuals"],
-        "Validation": results["validation"],
+        "equilibrium": {
+            "C1": residuals["C1"],
+            "C2": residuals["C2"],
+            "C7": residuals["C7"],
+            "C8": residuals["C8"],
+            "C9": residuals["C9"],
+            "C10": residuals["C10"],
+            "C11": residuals["C11"],
+        },
         "Surcharge": results["surcharge_power"],
-        "SurchargeRaw": results["surcharge_power_raw"],
-        "ShadowPrice": results["shadow_price_power"],
-        "Solver": results["solver_used"],
         "Diagnostics": {
             "stop_reason": results["diagnostics"].get("stop_reason"),
-            "boundary_inflow": results["diagnostics"].get("boundary_inflow"),
-            "boundary_outflow": results["diagnostics"].get("boundary_outflow"),
+            "dprice_start": dprice_hist[0] if dprice_hist else None,
+            "dprice_end": dprice_hist[-1] if dprice_hist else None,
+            "max_surcharge": max_surcharge,
+            "mode_share_by_group_last": results["diagnostics"].get("mode_share_by_group", [])[-1] if results["diagnostics"].get("mode_share_by_group") else {},
+            "power_tightness": results["diagnostics"].get("power_tightness", {}),
             "n_series": results["diagnostics"].get("n_series"),
             "g_series": results["diagnostics"].get("g_series"),
-            "cbd_tau": results["diagnostics"].get("cbd_tau"),
-            "mode_share_by_group_last": results["diagnostics"].get("mode_share_by_group", [])[-1] if results["diagnostics"].get("mode_share_by_group") else {},
+            "cbd_tau": cbd_tau_one,
         },
     }
     print(json.dumps(report, indent=2))
