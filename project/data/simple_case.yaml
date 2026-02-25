@@ -1,0 +1,314 @@
+{
+  "meta": {
+    "T": 2,
+    "delta_t": 1.0
+  },
+  "config": {
+    "max_iter": 60,
+    "min_iters": 10,
+    "patience": 3,
+    "surcharge_msa_alpha": 0.2,
+    "surcharge_kappa": 1.2,
+    "surcharge_beta": 2.0,
+    "representative_od": "A-B",
+    "tol": 0.02,
+    "eps_improve": 1e-06,
+    "use_generator": false,
+    "K_paths": 2
+  },
+  "sets": {
+    "time": [
+      1,
+      2
+    ],
+    "groups": [
+      "low",
+      "mid",
+      "high"
+    ],
+    "vot_groups": [
+      "low",
+      "mid",
+      "high"
+    ],
+    "od_pairs": [
+      [
+        "A",
+        "B"
+      ]
+    ],
+    "ods": [
+      "A-B"
+    ],
+    "arcs": [
+      "a_in",
+      "a_cbd",
+      "a_out",
+      "a_bypass"
+    ],
+    "stations": [
+      "s1"
+    ],
+    "vehicles": [
+      "m1"
+    ]
+  },
+  "parameters": {
+    "q": {
+      "A-B": {
+        "low": {
+          "1": 20,
+          "2": 12
+        },
+        "mid": {
+          "1": 14,
+          "2": 10
+        },
+        "high": {
+          "1": 8,
+          "2": 8
+        }
+      }
+    },
+    "VOT": {
+      "low": {
+        "1": 3,
+        "2": 3
+      },
+      "mid": {
+        "1": 6,
+        "2": 6
+      },
+      "high": {
+        "1": 12,
+        "2": 12
+      }
+    },
+    "lambda": {
+      "low": 0.2,
+      "mid": 0.3,
+      "high": 0.4
+    },
+    "arcs": {
+      "a_in": {
+        "tau0": 1.5,
+        "cap": 35.0,
+        "alpha": 0.15,
+        "beta": 4.0,
+        "type": "G"
+      },
+      "a_cbd": {
+        "tau0": 2.2,
+        "cap": 14.0,
+        "alpha": 0.15,
+        "beta": 4.0,
+        "type": "CBD",
+        "theta": 1.6
+      },
+      "a_out": {
+        "tau0": 1.5,
+        "cap": 32.0,
+        "alpha": 0.15,
+        "beta": 4.0,
+        "type": "G"
+      },
+      "a_bypass": {
+        "tau0": 3.2,
+        "cap": 28.0,
+        "alpha": 0.15,
+        "beta": 4.0,
+        "type": "G"
+      }
+    },
+    "boundary_in": [
+      "a_in"
+    ],
+    "boundary_out": [
+      "a_out"
+    ],
+    "n0": 20.0,
+    "mfd": {
+      "gamma": 0.55,
+      "n_crit": 36.0,
+      "g_max": 2.0
+    },
+    "stations": {
+      "s1": {
+        "cap_stall": 2,
+        "w0": 0.25,
+        "P_site": {
+          "1": 10.0,
+          "2": 10.0
+        }
+      }
+    },
+    "electricity_price": {
+      "s1": {
+        "1": 0.2,
+        "2": 0.2
+      }
+    },
+    "charging": {
+      "m1": {
+        "E_min": 2.0,
+        "E_max": 20.0,
+        "E_init": 8.0,
+        "E_res": 3.0,
+        "eta_ch": 0.9,
+        "P_max": 12.0
+      }
+    },
+    "avail": {
+      "m1": {
+        "s1": {
+          "1": 1,
+          "2": 1
+        }
+      }
+    },
+    "e_fly_or_drive": {
+      "m1": {
+        "1": 2.0,
+        "2": 3.0
+      }
+    },
+    "vertiport_storage": {
+      "s1": {
+        "B_init": 10.0,
+        "B_min": 1.0,
+        "B_max": 30.0,
+        "eta_ch": 0.9
+      }
+    },
+    "vertiport_cap_pax": {
+      "s1": {
+        "1": 0,
+        "2": 70
+      }
+    }
+  },
+  "itineraries": [
+    {
+      "id": "ab_ev_fast",
+      "od": [
+        "A",
+        "B"
+      ],
+      "mode": "EV",
+      "road_arcs": [
+        {
+          "arc": "a_in",
+          "t": 1,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_cbd",
+          "t": 1,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_out",
+          "t": 1,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_in",
+          "t": 2,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_cbd",
+          "t": 2,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_out",
+          "t": 2,
+          "frac": 0.55
+        }
+      ],
+      "stations": [
+        {
+          "station": "s1",
+          "t": 2,
+          "energy": 1.5
+        }
+      ],
+      "money": 1.2,
+      "flight_time": {
+        "1": 0.0,
+        "2": 0.0
+      }
+    },
+    {
+      "id": "ab_ev_bypass",
+      "od": [
+        "A",
+        "B"
+      ],
+      "mode": "EV",
+      "road_arcs": [
+        {
+          "arc": "a_in",
+          "t": 1,
+          "frac": 0.7
+        },
+        {
+          "arc": "a_bypass",
+          "t": 1,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_out",
+          "t": 1,
+          "frac": 0.7
+        },
+        {
+          "arc": "a_in",
+          "t": 2,
+          "frac": 0.7
+        },
+        {
+          "arc": "a_bypass",
+          "t": 2,
+          "frac": 1.0
+        },
+        {
+          "arc": "a_out",
+          "t": 2,
+          "frac": 0.45
+        }
+      ],
+      "stations": [
+        {
+          "station": "s1",
+          "t": 2,
+          "energy": 1.1
+        }
+      ],
+      "money": 0.9,
+      "flight_time": {
+        "1": 0.0,
+        "2": 0.0
+      }
+    },
+    {
+      "id": "ab_vt_s1",
+      "od": [
+        "A",
+        "B"
+      ],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "dep_station": "s1",
+      "money": 9.0,
+      "e_per_pax": 1.5,
+      "phi_energy_markup": 0.0,
+      "flight_time": {
+        "1": 0.0,
+        "2": 0.85
+      }
+    }
+  ]
+}
