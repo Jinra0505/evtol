@@ -112,8 +112,13 @@ def logit_assignment(
     lambdas: Dict[str, float],
     times: List[int],
 ) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
-    flows: Dict[str, Dict[str, Dict[int, float]]] = {it["id"]: {} for it in itineraries}
-    generalized_costs: Dict[str, Dict[str, Dict[int, float]]] = {it["id"]: {} for it in itineraries}
+    all_groups = sorted({g for od_groups in demand.values() for g in od_groups.keys()})
+    flows: Dict[str, Dict[str, Dict[int, float]]] = {
+        it["id"]: {group: {t: 0.0 for t in times} for group in all_groups} for it in itineraries
+    }
+    generalized_costs: Dict[str, Dict[str, Dict[int, float]]] = {
+        it["id"]: {group: {t: 0.0 for t in times} for group in all_groups} for it in itineraries
+    }
     itineraries_by_od: Dict[str, List[Dict[str, Any]]] = {}
     for it in itineraries:
         od_key = f"{it['od'][0]}-{it['od'][1]}"
@@ -138,7 +143,7 @@ def logit_assignment(
                 for it in available_alts:
                     comp = costs[it["id"]][t]
                     gen_cost = vot[group][t] * comp["TT"] + comp["Money"] + comp["ChargeCost"]
-                    generalized_costs[it["id"]].setdefault(group, {})[t] = gen_cost
+                    generalized_costs[it["id"]][group][t] = gen_cost
                     cost_values.append(-lambdas[group] * gen_cost)
                 log_denom = logsumexp(cost_values)
                 total_demand = time_map.get(t, 0.0)
@@ -146,7 +151,7 @@ def logit_assignment(
                     continue
                 for it, util in zip(available_alts, cost_values):
                     share = math.exp(util - log_denom)
-                    flows[it["id"]].setdefault(group, {})[t] = total_demand * share
+                    flows[it["id"]][group][t] = total_demand * share
     return flows, generalized_costs
 
 

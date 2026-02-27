@@ -1,16 +1,34 @@
 import json
 import math
+from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 
+def _resolve_path(path: str) -> Path:
+    candidate = Path(path)
+    if candidate.exists():
+        return candidate
+
+    project_root = Path(__file__).resolve().parents[1]
+    if candidate.parts and candidate.parts[0] == project_root.name:
+        candidate = Path(*candidate.parts[1:])
+
+    rooted = project_root / candidate
+    if rooted.exists():
+        return rooted
+
+    return Path(path)
+
+
 def load_yaml(path: str) -> Dict[str, Any]:
+    resolved_path = _resolve_path(path)
     try:
         import yaml  # type: ignore
 
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(resolved_path, "r", encoding="utf-8") as handle:
             return yaml.safe_load(handle)
     except ModuleNotFoundError:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(resolved_path, "r", encoding="utf-8") as handle:
             return json.load(handle)
 
 
