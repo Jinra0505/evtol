@@ -10,6 +10,7 @@ except ImportError:
     HAS_GUROBI = False
 
 LAST_SOLVER_USED = "unknown"
+LAST_SHARED_SOLVER_USED = "unknown"
 
 
 def compute_station_loads_from_flows(
@@ -48,9 +49,6 @@ def compute_station_loads_from_flows(
             if s in data["parameters"].get("vertiport_storage", {}):
                 eta = max(1e-6, float(data["parameters"]["vertiport_storage"][s].get("eta_ch", 1.0)))
             P_vt_req[s][t] = E_vt_req[s][t] / (eta * delta_t) if delta_t > 0 else 0.0
-            # Hard safety: if site has no power capability keep req tracked but bounded for diagnostics.
-            if float(station_params[s]["P_site"][t]) <= 0.0:
-                P_vt_req[s][t] = 0.0
             P_total_req[s][t] = P_ev_req[s][t] + P_vt_req[s][t]
 
     return {
@@ -75,8 +73,12 @@ def _solve_shared_power_core(
     Dict[str, Dict[int, float]],
     Dict[str, float],
 ]:
+    global LAST_SHARED_SOLVER_USED
     if not HAS_GUROBI:
+        LAST_SHARED_SOLVER_USED = "heuristic"
         return _solve_shared_power_core_heuristic(data, times, e_dep, ev_energy)
+
+    LAST_SHARED_SOLVER_USED = "gurobi"
 
     stations = data["sets"]["stations"]
     delta_t = data["meta"]["delta_t"]
@@ -152,7 +154,10 @@ def _solve_shared_power_core(
     P_out = {dep: {t: float(P_vt[dep, t].X) for t in times} for dep in e_dep}
     shed_ev_out = {s: {t: float(shed_ev[s, t].X) for t in times} for s in stations}
     shed_vt_out = {dep: {t: float(shed_vt[dep, t].X) for t in times} for dep in e_dep}
-    shadow_prices = {s: {t: float(power_constraints[s, t].Pi) for t in times} for s in stations}
+    shadow_prices = {
+        s: {t: max(0.0, -float(power_constraints[s, t].Pi)) for t in times}
+        for s in stations
+    }
 
     residuals = {"INV1": 0.0, "INV2": 0.0, "INV3": 0.0, "INV4": 0.0}
     for dep in e_dep:
@@ -197,6 +202,7 @@ def _solve_shared_power_core_heuristic(
     station_params = data["parameters"]["stations"]
     storage_params = data["parameters"].get("vertiport_storage")
     kappa = float(data.get("config", {}).get("shadow_kappa", 2.0))
+    prices = data["parameters"]["electricity_price"]
 
     if storage_params is None and e_dep:
         raise ValueError("Missing required key path: parameters.vertiport_storage")
@@ -224,9 +230,10 @@ def _solve_shared_power_core_heuristic(
             if s in e_dep:
                 eta = storage_params[s]["eta_ch"]
                 p_vt_req = max(0.0, e_dep[s][t] / (eta * delta_t)) if eta > 0 else 0.0
-            slack = station_params[s]["P_site"][t] - (p_ev_req + p_vt_req)
-            if slack < 0.0 and station_params[s]["P_site"][t] > 0.0:
-                shadow_prices[s][t] = kappa * (-slack / station_params[s]["P_site"][t])
+            p_site = max(1e-6, float(station_params[s]["P_site"][t]))
+            slack_kw = p_site - (p_ev_req + p_vt_req)
+            ratio = max(0.0, -slack_kw) / p_site
+            shadow_prices[s][t] = kappa * prices[s][t] * delta_t * ratio
 
     for dep in e_dep:
         B_out[dep][times[0]] = storage_params[dep]["B_init"]
@@ -337,7 +344,8 @@ def solve_charging(
     prices = data["parameters"]["electricity_price"]
     storage_params = data["parameters"].get("vertiport_storage")
 
-    include_vt = e_dep is not None and d_dep is not None and any(
+    # d_dep kept for API compatibility/future vehicle turnover constraints; LP here uses e_dep only.
+    include_vt = (e_dep is not None) and any(
         val > 0.0 for dep in (e_dep or {}) for val in e_dep[dep].values()
     )
     if include_vt and storage_params is None:
@@ -481,7 +489,8 @@ def _solve_charging_pulp(
     prices = data["parameters"]["electricity_price"]
     storage_params = data["parameters"].get("vertiport_storage")
 
-    include_vt = e_dep is not None and d_dep is not None and any(
+    # d_dep kept for API compatibility/future vehicle turnover constraints; LP here uses e_dep only.
+    include_vt = (e_dep is not None) and any(
         val > 0.0 for dep in (e_dep or {}) for val in e_dep[dep].values()
     )
     if include_vt and storage_params is None:

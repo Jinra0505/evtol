@@ -10,21 +10,35 @@ def build_incidence(
     stations: List[str],
     times: List[int],
 ) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
+    arc_set = set(arcs)
+    station_set = set(stations)
+    time_set = set(times)
     inc_road = {arc: {it["id"]: {t: 0.0 for t in times} for it in itineraries} for arc in arcs}
     inc_station = {s: {it["id"]: {t: 0.0 for t in times} for it in itineraries} for s in stations}
     for it in itineraries:
+        it_id = it.get("id", "<unknown>")
         for seg in it.get("road_arcs", []):
             arc = seg["arc"]
             t = seg["t"]
+            if arc not in arc_set:
+                raise KeyError(f"Unknown arc in itinerary {it_id}: arc={arc}")
+            if t not in time_set:
+                raise KeyError(f"Unknown time in itinerary {it_id}: t={t}")
             frac = seg.get("frac", 1.0)
             inc_road[arc][it["id"]][t] += frac
         for stop in it.get("stations", []):
             station = stop["station"]
             t = stop["t"]
+            if station not in station_set:
+                raise KeyError(f"Unknown station in itinerary {it_id}: station={station}")
+            if t not in time_set:
+                raise KeyError(f"Unknown time in itinerary {it_id}: t={t}")
             inc_station[station][it["id"]][t] += 1.0
         if it.get("mode") == "eVTOL":
             dep_station = it.get("dep_station")
             if dep_station is not None:
+                if dep_station not in station_set:
+                    raise KeyError(f"Unknown dep_station in itinerary {it_id}: dep_station={dep_station}")
                 flight_time = it.get("flight_time", {})
                 for t in times:
                     if flight_time.get(t, 0.0) > 0.0:
@@ -41,6 +55,7 @@ def compute_itinerary_costs(
 ) -> Dict[str, Dict[int, Dict[str, float]]]:
     costs: Dict[str, Dict[int, Dict[str, float]]] = {it["id"]: {} for it in itineraries}
     for it in itineraries:
+        it_id = it.get("id", "<unknown>")
         flight_time = it.get("flight_time", {})
         base_money = it.get("money", 0.0)
         phi_markup = it.get("phi_energy_markup", 1.0)
@@ -52,15 +67,32 @@ def compute_itinerary_costs(
             charge_cost = 0.0
             for seg in it.get("road_arcs", []):
                 if seg["t"] == t:
+                    if seg["arc"] not in travel_times or t not in travel_times[seg["arc"]]:
+                        raise KeyError(f"Missing travel_times for itinerary {it_id}, arc={seg['arc']}, t={t}")
                     tt += travel_times[seg["arc"]][t] * seg.get("frac", 1.0)
             tt += float(flight_time.get(t, 0.0))
             for stop in it.get("stations", []):
                 if stop["t"] == t:
                     station = stop["station"]
+                    if station not in station_waits or t not in station_waits[station]:
+                        raise KeyError(f"Missing station_waits for itinerary {it_id}, station={station}, t={t}")
+                    if station not in electricity_price or t not in electricity_price[station]:
+                        raise KeyError(f"Missing electricity_price for itinerary {it_id}, station={station}, t={t}")
                     tt += station_waits[station][t]
                     energy = stop.get("energy", 0.0)
                     charge_cost += energy * electricity_price[station][t]
             if it.get("mode") == "eVTOL" and dep_station is not None:
+                if flight_time.get(t, 0.0) <= 0.0:
+                    costs[it["id"]][t] = {
+                        "TT": 1.0e12,
+                        "Money": 1.0e12,
+                        "ChargeCost": 1.0e12,
+                    }
+                    continue
+                if dep_station not in station_waits or t not in station_waits[dep_station]:
+                    raise KeyError(f"Missing station_waits for itinerary {it_id}, dep_station={dep_station}, t={t}")
+                if dep_station not in electricity_price or t not in electricity_price[dep_station]:
+                    raise KeyError(f"Missing electricity_price for itinerary {it_id}, dep_station={dep_station}, t={t}")
                 tt += station_waits[dep_station][t]
                 energy_fare = phi_markup * e_per_pax * electricity_price[dep_station][t]
                 money_t += energy_fare
@@ -109,7 +141,9 @@ def logit_assignment(
                     generalized_costs[it["id"]].setdefault(group, {})[t] = gen_cost
                     cost_values.append(-lambdas[group] * gen_cost)
                 log_denom = logsumexp(cost_values)
-                total_demand = time_map[t]
+                total_demand = time_map.get(t, 0.0)
+                if total_demand <= 0.0:
+                    continue
                 for it, util in zip(available_alts, cost_values):
                     share = math.exp(util - log_denom)
                     flows[it["id"]].setdefault(group, {})[t] = total_demand * share
@@ -152,7 +186,7 @@ def aggregate_station_utilization(
             for stop in it.get("stations", []):
                 station = stop["station"]
                 t = stop["t"]
-                utilization[station][t] += time_map[t]
+                utilization[station][t] += time_map.get(t, 0.0)
             if it.get("mode") == "eVTOL":
                 dep_station = it.get("dep_station")
                 if dep_station is not None:
@@ -196,7 +230,7 @@ def aggregate_ev_energy_demand(
             for stop in it.get("stations", []):
                 station = stop["station"]
                 t = stop["t"]
-                energy[station][t] += stop.get("energy", 0.0) * time_map[t]
+                energy[station][t] += stop.get("energy", 0.0) * time_map.get(t, 0.0)
     return energy
 
 

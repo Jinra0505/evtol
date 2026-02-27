@@ -117,7 +117,17 @@ def compute_residuals(
     mfd_params = data["parameters"]["mfd"]
     delta_t = data["meta"]["delta_t"]
 
-    residuals = {"C1": 0.0, "C2": 0.0, "C7": 0.0, "C8": 0.0, "C9": 0.0, "C11": 0.0, "C10": 0.0}
+    residuals = {
+        "C1": 0.0,
+        "C2": 0.0,
+        "C2_raw": 0.0,
+        "C7": 0.0,
+        "C8": 0.0,
+        "C9": 0.0,
+        "C11": 0.0,
+        "C10": 0.0,
+        "C10_raw": 0.0,
+    }
 
     for od_key, groups in demand.items():
         for group, time_map in groups.items():
@@ -130,14 +140,15 @@ def compute_residuals(
                 residuals["C1"] = max(residuals["C1"], abs(total - q_val))
                 residuals["C11"] = max(residuals["C11"], abs(total - q_val))
 
-    arc_check = arc_flows_raw or arc_flows
     for arc in arcs:
         for t in times:
             expected = 0.0
             for it in itineraries:
                 for group, time_map in flows[it["id"]].items():
                     expected += inc_road[arc][it["id"]][t] * time_map.get(t, 0.0)
-            residuals["C2"] = max(residuals["C2"], abs(arc_check[arc][t] - expected))
+            residuals["C2"] = max(residuals["C2"], abs(arc_flows[arc][t] - expected))
+            if arc_flows_raw is not None:
+                residuals["C2_raw"] = max(residuals["C2_raw"], abs(arc_flows_raw[arc][t] - expected))
 
     inflow_total, outflow_total = boundary_flows(arc_flows, boundary_in, boundary_out, times)
     inflow = [val / delta_t for val in inflow_total]
@@ -156,8 +167,7 @@ def compute_residuals(
                 expected_tau = params["tau0"] * g_series[idx] * params.get("theta", 1.0)
                 residuals["C9"] = max(residuals["C9"], abs(tau[arc][t] - expected_tau))
 
-    utilization_check = utilization_raw or utilization
-    for station in utilization_check:
+    for station in utilization:
         for t in times:
             expected_u = 0.0
             for it in itineraries:
@@ -165,8 +175,13 @@ def compute_residuals(
                     expected_u += inc_station.get(station, {}).get(it["id"], {}).get(t, 0.0) * time_map.get(t, 0.0)
             residuals["C10"] = max(
                 residuals["C10"],
-                abs(utilization_check[station][t] - expected_u),
+                abs(utilization[station][t] - expected_u),
             )
+            if utilization_raw is not None:
+                residuals["C10_raw"] = max(
+                    residuals["C10_raw"],
+                    abs(utilization_raw[station][t] - expected_u),
+                )
 
     return residuals
 
@@ -183,6 +198,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     delta_t = data["meta"]["delta_t"]
     config = data["config"]
     config["tol"] = float(config["tol"])
+    config.setdefault("surcharge_method", "shadow_lp")
+    config.setdefault("shadow_price_scale", 1.0)
+    config.setdefault("shadow_price_cap_mult", 10.0)
     itineraries = list(data["itineraries"])
     seen_ids = {it["id"] for it in itineraries}
     arc_params = data["parameters"]["arcs"]
@@ -310,30 +328,57 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         load_agg = compute_station_loads_from_flows(data, itineraries, flows, times)
         p_ev_req = load_agg["P_ev_req"]
         p_vt_req = load_agg["P_vt_req"]
-        shadow_prices = {s: {t: 0.0 for t in times} for s in stations}
-        shed_ev = {s: {t: 0.0 for t in times} for s in stations}
-        shed_vt = {s: {t: 0.0 for t in times} for s in stations}
-        shared_power_residuals = {"INV3": 0.0}
+        fallback_used = False
+        try:
+            (
+                B_vt_lp,
+                P_vt_lp,
+                shed_ev,
+                shed_vt,
+                shadow_prices,
+                shared_power_residuals,
+            ) = charging.solve_shared_power_inventory_lp(data, e_dep, load_agg["E_ev_req"])
+        except Exception:
+            fallback_used = True
+            shadow_prices = {s: {t: 0.0 for t in times} for s in stations}
+            shed_ev = {s: {t: 0.0 for t in times} for s in stations}
+            shed_vt = {s: {t: 0.0 for t in times} for s in stations}
+            shared_power_residuals = {"INV3": 0.0}
+            beta = float(config.get("surcharge_beta", 2.0))
+            surcharge_kappa = float(config.get("surcharge_kappa", 0.5))
+            for s in stations:
+                for t in times:
+                    p_site = max(1e-6, float(station_params[s]["P_site"][t]))
+                    util_power = (p_ev_req[s][t] + p_vt_req[s][t]) / p_site
+                    overload = max(0.0, util_power - 1.0)
+                    shadow_prices[s][t] = surcharge_kappa * electricity_price[s][t] * delta_t * overload
+                    shed_ev[s][t] = max(0.0, p_ev_req[s][t] - p_site)
+                    shed_vt[s][t] = max(0.0, p_vt_req[s][t] - max(0.0, p_site - p_ev_req[s][t]))
+                    shared_power_residuals["INV3"] = max(
+                        shared_power_residuals["INV3"],
+                        max(0.0, p_ev_req[s][t] + p_vt_req[s][t] - p_site),
+                    )
 
-        beta = float(config.get("surcharge_beta", 2.0))
-        surcharge_kappa = float(config.get("surcharge_kappa", 0.5))
+        shadow_scale = float(config.get("shadow_price_scale", 1.0))
+        cap_mult = float(config.get("shadow_price_cap_mult", 10.0))
         for s in stations:
             for t in times:
                 p_site = max(1e-6, float(station_params[s]["P_site"][t]))
-                util_power = (p_ev_req[s][t] + p_vt_req[s][t]) / p_site
-                overload = max(0.0, util_power - 1.0)
-                shadow_prices[s][t] = overload
-                raw_surcharge[s][t] = electricity_price[s][t] * surcharge_kappa * (overload ** beta)
-                shed_ev[s][t] = max(0.0, p_ev_req[s][t] - p_site)
-                shared_power_residuals["INV3"] = max(
-                    shared_power_residuals["INV3"],
-                    max(0.0, p_ev_req[s][t] + p_vt_req[s][t] - p_site),
-                )
+                ratio_req = (p_ev_req[s][t] + p_vt_req[s][t]) / p_site
+                raw = shadow_scale * shadow_prices[s][t] / max(1e-6, delta_t)
+                cap = cap_mult * max(1e-6, electricity_price[s][t])
+                raw_surcharge[s][t] = min(raw, cap)
                 diagnostics["power_tightness"].setdefault(s, {})[t] = {
                     "P_ev_req": p_ev_req[s][t],
                     "P_vt_req": p_vt_req[s][t],
                     "P_site": p_site,
-                    "ratio": util_power,
+                    "ratio_req": ratio_req,
+                    "shed_ev": (shed_ev or {}).get(s, {}).get(t, 0.0),
+                    "shed_vt": (shed_vt or {}).get(s, {}).get(t, 0.0),
+                    "shadow_mu_kw": shadow_prices[s][t],
+                    "raw_surcharge": raw_surcharge[s][t],
+                    "fallback_used": fallback_used,
+                    "shared_solver": charging.LAST_SHARED_SOLVER_USED,
                 }
 
         prev_surcharge = {s: {t: energy_surcharge[s][t] for t in times} for s in stations}
@@ -526,7 +571,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         theta = float(params.get("theta", 1.0))
         cbd_tau[arc] = {}
         for idx, t in enumerate(times):
-            g_t = g_series[min(idx + 1, len(g_series) - 1)]
+            g_t = g_series[min(idx, len(g_series) - 1)]
             cbd_tau[arc][t] = float(params["tau0"]) * g_t * theta
 
     results = {
