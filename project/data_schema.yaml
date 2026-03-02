@@ -1,0 +1,31 @@
+{
+  "required_paths": [
+    "meta.T",
+    "meta.delta_t",
+    "config.max_iter",
+    "config.tol",
+    "config.eps_improve",
+    "config.use_generator",
+    "config.K_paths",
+    "sets.time",
+    "sets.vot_groups",
+    "sets.od_pairs",
+    "sets.arcs",
+    "sets.stations",
+    "sets.vehicles",
+    "parameters.q",
+    "parameters.VOT",
+    "parameters.lambda",
+    "parameters.arcs",
+    "parameters.boundary_in",
+    "parameters.boundary_out",
+    "parameters.n0",
+    "parameters.mfd",
+    "parameters.stations",
+    "parameters.charging",
+    "parameters.avail",
+    "parameters.electricity_price",
+    "parameters.e_fly_or_drive",
+    "itineraries"
+  ]
+}
