@@ -71,11 +71,39 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
             if p_net_served - p_site_raw > 1.0e-6:
                 severe.append(f"served power exceeds site cap at {station},{t}")
 
-    n_series = results.get("diagnostics", {}).get("g_state_series", [])
-    has_negative_n = any(float(v) < -1.0e-9 for v in n_series)
+            e_vt_req = float(entry.get("E_vt_req_kwh", 0.0))
+            shed_vt_kwh = float(entry.get("shed_vt_kwh", 0.0))
+            p_vt_charge = float(entry.get("P_vt_charge_kw", 0.0))
+            b_before = entry.get("B_before_kwh")
+            b_after = entry.get("B_after_kwh")
+            if e_vt_req > 1.0e-6 and shed_vt_kwh <= 1.0e-9 and p_vt_charge <= 1.0e-9:
+                if b_before is not None and b_after is not None:
+                    expected_drop = e_vt_req
+                    actual_drop = float(b_before) - float(b_after)
+                    rel = abs(actual_drop - expected_drop) / max(1.0e-6, expected_drop)
+                    if rel <= 0.05:
+                        warnings.append(f"VT demand served by inventory (OK) at {station},{t}")
+                    else:
+                        severe.append("VT demand not enforced (terminal period bug or key mismatch).")
+                else:
+                    severe.append("VT demand not enforced (terminal period bug or key mismatch).")
+
+            ratio_req = float(entry.get("ratio_req", 0.0))
+            ratio_net = float(entry.get("ratio_net", 0.0))
+            if ratio_req > 1.0 and ratio_net < 1.0 and float(entry.get("mu_kw", 0.0)) == 0.0:
+                warnings.append(f"High request ratio but non-binding net ratio; likely buffered by inventory at {station},{t}")
+
+    n_series = results.get("diagnostics", {}).get("n_series", {})
+    n_values = n_series.values() if isinstance(n_series, dict) else n_series
+    has_negative_n = any(float(v) < -1.0e-9 for v in n_values)
     if has_negative_n:
         severe.append("negative value detected in n_series")
 
+    if cap_binding:
+        warnings.append("price cap binding detected; report capped and uncapped surcharge in analysis")
+    solver_used = results.get("diagnostics", {}).get("shared_power_solver_used")
+    if solver_used != "highs":
+        warnings.append(f"shared_power solver is {solver_used}, not highs; dual interpretation may differ")
     warnings.extend(severe)
     audit = {
         "ok": len(severe) == 0,
@@ -266,6 +294,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     config.setdefault("vt_reliability_floor", 0.05)
     config.setdefault("vt_reliability_alpha", None)
     config.setdefault("vt_reliability_skip_below", 0.0)
+    config.setdefault("vt_reliability_gamma", 1.0)
     config.setdefault("strict_audit", True)
     config.setdefault("audit_raise", False)
     config.setdefault("power_violation_mode", "net")
@@ -316,6 +345,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     e_dep: Dict[str, Dict[int, float]] = {}
     shadow_prices: Dict[str, Dict[int, float]] | None = None
     raw_surcharge: Dict[str, Dict[int, float]] = {s: {t: 0.0 for t in times} for s in stations}
+    raw_surcharge_uncapped: Dict[str, Dict[int, float]] = {s: {t: 0.0 for t in times} for s in stations}
     shed_ev: Dict[str, Dict[int, float]] | None = None
     shed_vt: Dict[str, Dict[int, float]] | None = None
     P_vt_lp: Dict[str, Dict[int, float]] | None = None
@@ -360,6 +390,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             times,
             vt_service_prob=vt_service_prob,
             vt_service_prob_floor=1.0e-4,
+            vt_reliability_gamma=float(config["vt_reliability_gamma"]),
             vt_service_prob_skip_below=float(config["vt_reliability_skip_below"]),
         )
 
@@ -431,7 +462,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     B_vt_lp.setdefault(s, {t: 0.0 for t in times})
                     P_vt_lp.setdefault(s, {t: 0.0 for t in times})
                 lp_ok = True
-                diagnostics["shared_power_solver_used"] = charging.LAST_SHARED_SOLVER_USED
+                diagnostics["shared_power_solver_used"] = charging.LAST_SHARED_POWER_SOLVER_USED
             except Exception as exc:
                 fallback_used = True
                 diagnostics["shared_power_fallback"] = str(exc)
@@ -472,6 +503,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 p_site_den = _safe_den(p_site_raw)
                 mu_kw = shadow_prices[s][t]
                 raw = shadow_scale * mu_kw / max(1e-6, delta_t)
+                raw_surcharge_uncapped[s][t] = raw
                 cap = cap_mult * base_price
                 raw_surcharge[s][t] = min(raw, cap)
                 cap_binding_map[s][t] = raw_surcharge[s][t] >= cap - 1.0e-9
@@ -502,23 +534,46 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 p_site_den = _safe_den(p_site_raw)
                 p_ev_served_kw = max(0.0, p_ev_req[s][t] - (shed_ev or {}).get(s, {}).get(t, 0.0))
                 p_vt_served_kw = (P_vt_lp or {}).get(s, {}).get(t, 0.0)
+                t_idx = times.index(t)
+                t_next = times[t_idx + 1] if t_idx + 1 < len(times) else None
+                b_before = (B_vt_lp or {}).get(s, {}).get(t)
+                if t_next is not None:
+                    b_after = (B_vt_lp or {}).get(s, {}).get(t_next)
+                else:
+                    eta = 1.0
+                    if s in data["parameters"].get("vertiport_storage", {}):
+                        eta = float(data["parameters"]["vertiport_storage"][s].get("eta_ch", 1.0))
+                    if b_before is not None:
+                        b_after = float(b_before) + eta * p_vt_served_kw * delta_t - (
+                            float(e_vt_req[s][t]) - float((shed_vt or {}).get(s, {}).get(t, 0.0))
+                        )
+                    else:
+                        b_after = None
+                p_net_served_kw = p_ev_served_kw + p_vt_served_kw
                 diagnostics["power_tightness"].setdefault(s, {})[t] = {
                     "P_site_raw": p_site_raw,
                     "P_site_den": p_site_den,
                     "ratio_req": (p_ev_req[s][t] + p_vt_req[s][t]) / p_site_den,
+                    "ratio_net": p_net_served_kw / p_site_den,
                     "mu_kw": shadow_prices[s][t],
+                    "raw_surcharge_uncapped": raw_surcharge_uncapped[s][t],
                     "raw_surcharge": raw_surcharge[s][t],
                     "surcharge_smoothed": energy_surcharge[s][t],
                     "cap": cap_mult * base_price,
                     "cap_binding": cap_binding_map[s][t],
+                    "E_vt_req_kwh": e_vt_req[s][t],
+                    "P_vt_charge_kw": p_vt_served_kw,
+                    "B_before_kwh": b_before,
+                    "B_after_kwh": b_after,
                     "shed_ev_kw": (shed_ev or {}).get(s, {}).get(t, 0.0),
                     "shed_vt_kwh": (shed_vt or {}).get(s, {}).get(t, 0.0),
                     "p_ev_served_kw": p_ev_served_kw,
                     "p_vt_served_kw": p_vt_served_kw,
-                    "p_net_served_kw": p_ev_served_kw + p_vt_served_kw,
+                    "p_net_served_kw": p_net_served_kw,
                     "vt_service_prob_target": vt_service_prob_target[s][t],
                     "vt_service_prob": vt_service_prob[s][t],
                     "shed_ratio": shed_ratio_map[s][t],
+                    "solver_used": diagnostics.get("shared_power_solver_used"),
                     "fallback_used": fallback_used,
                 }
 
@@ -734,6 +789,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "shadow_price_power": shadow_prices,
         "surcharge_power": energy_surcharge,
         "surcharge_power_raw": raw_surcharge,
+        "surcharge_power_uncapped": raw_surcharge_uncapped,
         "shared_power": {
             "B_vt": B_vt_lp,
             "P_vt": P_vt_lp,
@@ -760,6 +816,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "cbd_tau_used": cbd_tau,
             "station_loads": load_agg,
             "vt_service_prob": vt_service_prob,
+            "vt_inventory_B": B_vt_lp,
+            "vt_charge_power_P": P_vt_lp,
         },
         "charging": {
             "E": E,
@@ -851,6 +909,7 @@ def main() -> None:
             "C11": residuals["C11"],
         },
         "Surcharge": results["surcharge_power"],
+        "SurchargeUncapped": results.get("surcharge_power_uncapped", {}),
         "Diagnostics": {
             "stop_reason": results["diagnostics"].get("stop_reason"),
             "iter_count": results["convergence"].get("iterations"),
