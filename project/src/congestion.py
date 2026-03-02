@@ -1,8 +1,12 @@
 from typing import Dict, List
 
 
-def _safe_den(x: float, eps: float = 1e-6) -> float:
-    return eps if x is None or float(x) <= 0 else float(x)
+def _safe_den(x, eps: float = 1e-6) -> float:
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return eps
+    return v if v > 0 else eps
 
 
 def compute_road_times(
@@ -14,7 +18,7 @@ def compute_road_times(
     tau = {arc: {} for arc in arc_params}
     for arc, params in arc_params.items():
         tau0 = params["tau0"]
-        cap = _safe_den(params.get("cap"))
+        cap = _safe_den(params.get("cap", 0))
         alpha = params["alpha"]
         beta = params["beta"]
         arc_type = params["type"]
@@ -25,7 +29,7 @@ def compute_road_times(
             if arc_type == "G":
                 tau[arc][t] = tau0 * (1.0 + alpha * (x / cap) ** beta)
             elif arc_type == "CBD":
-                tau[arc][t] = tau0 * g_values[t] * theta
+                tau[arc][t] = tau0 * g_values.get(t, 1.0) * theta
             else:
                 if use_bpr:
                     tau[arc][t] = tau0 * (1.0 + alpha * (x / cap) ** beta)
@@ -41,7 +45,7 @@ def compute_station_waits(
 ) -> Dict[str, Dict[int, float]]:
     waits = {s: {} for s in station_params}
     for station, params in station_params.items():
-        cap = _safe_den(params.get("cap_stall"))
+        cap = _safe_den(params.get("cap_stall", 0))
         w0 = params["w0"]
         for t in times:
             u = utilization.get(station, {}).get(t, 0.0)

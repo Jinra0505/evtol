@@ -22,7 +22,7 @@ def update_accumulation(
     n = [n0]
     for t in range(len(inflow)):
         n_next = n[t] + delta_t * (inflow[t] - outflow[t])
-        n.append(n_next)
+        n.append(max(0.0, n_next))
     return n
 
 

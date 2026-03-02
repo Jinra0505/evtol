@@ -29,6 +29,65 @@ from .itinerary_generator import generate_itineraries
 from .mfd import boundary_flows, compute_g, update_accumulation
 
 
+
+
+def _safe_den(x: Any, eps: float = 1.0e-6) -> float:
+    try:
+        val = float(x)
+    except (TypeError, ValueError):
+        return eps
+    return val if val > 0.0 else eps
+
+
+def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    floor = float(config.get("vt_reliability_floor", 0.05))
+    warnings: List[str] = []
+    severe: List[str] = []
+    cap_binding = False
+
+    power_tightness = results.get("diagnostics", {}).get("power_tightness", {})
+    for station, t_map in power_tightness.items():
+        for t, entry in t_map.items():
+            mu_kw = float(entry.get("mu_kw", 0.0))
+            surcharge = float(entry.get("raw_surcharge", 0.0))
+            if not (mu_kw >= 0.0 and mu_kw < float("inf")):
+                severe.append(f"invalid mu_kw at {station},{t}: {mu_kw}")
+            if not (surcharge >= 0.0 and surcharge < float("inf")):
+                severe.append(f"invalid surcharge at {station},{t}: {surcharge}")
+            if abs(surcharge - float(entry.get("cap", -1.0))) <= 1.0e-9:
+                cap_binding = True
+
+            vt_prob = float(entry.get("vt_service_prob", 1.0))
+            if vt_prob < floor - 1.0e-8 or vt_prob > 1.0 + 1.0e-8:
+                warnings.append(f"vt_service_prob out of range at {station},{t}: {vt_prob}")
+
+            shed_ratio = float(entry.get("shed_ratio", 0.0))
+            vt_target = float(entry.get("vt_service_prob_target", 1.0))
+            if shed_ratio > 0.0 and vt_target >= 1.0:
+                warnings.append(f"shed_ratio>0 but target_prob>=1 at {station},{t}")
+
+            p_net_served = float(entry.get("p_net_served_kw", 0.0))
+            p_site_raw = float(entry.get("P_site_raw", 0.0))
+            if p_net_served - p_site_raw > 1.0e-6:
+                severe.append(f"served power exceeds site cap at {station},{t}")
+
+    n_series = results.get("diagnostics", {}).get("g_state_series", [])
+    has_negative_n = any(float(v) < -1.0e-9 for v in n_series)
+    if has_negative_n:
+        severe.append("negative value detected in n_series")
+
+    warnings.extend(severe)
+    audit = {
+        "ok": len(severe) == 0,
+        "warnings": warnings,
+        "severe": severe,
+        "cap_binding": cap_binding,
+        "has_negative_n": has_negative_n,
+    }
+    if bool(config.get("audit_raise", False)) and severe:
+        raise ValueError("SelfAudit severe issues: " + "; ".join(severe))
+    return audit
+
 def _fill_missing(mapping: Dict[str, Dict[int, float]], keys: List[str], times: List[int]) -> Dict[str, Dict[int, float]]:
     for key in keys:
         mapping.setdefault(key, {t: 0.0 for t in times})
@@ -127,6 +186,7 @@ def compute_residuals(
         "C11": 0.0,
         "C10": 0.0,
         "C10_raw": 0.0,
+        "C2_rel": 0.0,
     }
 
     for od_key, groups in demand.items():
@@ -183,6 +243,8 @@ def compute_residuals(
                     abs(utilization_raw[station][t] - expected_u),
                 )
 
+    max_flow = max(max(abs(arc_flows[a][t]), 1.0) for a in arcs for t in times)
+    residuals["C2_rel"] = residuals["C2"] / _safe_den(max_flow, 1.0)
     return residuals
 
 
@@ -201,6 +263,12 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     config.setdefault("surcharge_method", "shadow_lp")
     config.setdefault("shadow_price_scale", 1.0)
     config.setdefault("shadow_price_cap_mult", 10.0)
+    config.setdefault("vt_reliability_floor", 0.05)
+    config.setdefault("vt_reliability_alpha", None)
+    config.setdefault("vt_reliability_skip_below", 0.0)
+    config.setdefault("strict_audit", True)
+    config.setdefault("audit_raise", False)
+    config.setdefault("power_violation_mode", "net")
     itineraries = list(data["itineraries"])
     seen_ids = {it["id"] for it in itineraries}
     arc_params = data["parameters"]["arcs"]
@@ -217,6 +285,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     )
     g_series = compute_g(n_series, data["parameters"]["mfd"])
     energy_surcharge = {s: {t: 0.0 for t in times} for s in stations}
+    vt_service_prob = {s: {t: 1.0 for t in times} for s in stations}
     min_iters = int(config.get("min_iters", 10))
     patience = int(config.get("patience", 5))
     stop_reason = "max_iters"
@@ -235,6 +304,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "surcharge_history": [],
         "mode_share_by_group": [],
         "power_tightness": {},
+        "shared_power_solver_used": "unknown",
     }
 
     dx = 0.0
@@ -252,6 +322,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     B_vt_lp: Dict[str, Dict[int, float]] | None = None
     shared_power_residuals: Dict[str, float] | None = None
     load_agg: Dict[str, Dict[str, Dict[int, float]]] = {}
+    lp_ok = False
 
     costs: Dict[str, Dict[int, Dict[str, float]]] = {}
     x_new = arc_flows
@@ -287,6 +358,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             data["parameters"]["VOT"],
             data["parameters"]["lambda"],
             times,
+            vt_service_prob=vt_service_prob,
+            vt_service_prob_floor=1.0e-4,
+            vt_service_prob_skip_below=float(config["vt_reliability_skip_below"]),
         )
 
         cap_pax = data["parameters"].get("vertiport_cap_pax")
@@ -326,67 +400,127 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         g_series = compute_g(n_series, data["parameters"]["mfd"])
 
         load_agg = compute_station_loads_from_flows(data, itineraries, flows, times)
+        e_vt_req = load_agg["E_vt_req"]
         p_ev_req = load_agg["P_ev_req"]
         p_vt_req = load_agg["P_vt_req"]
+        ev_energy_kwh = load_agg["E_ev_req"]
+        surcharge_method = config.get("surcharge_method", "shadow_lp")
+        shadow_scale = float(config.get("shadow_price_scale", 1.0))
+        cap_mult = float(config.get("shadow_price_cap_mult", 10.0))
+        lp_ok = False
         fallback_used = False
-        try:
-            (
-                B_vt_lp,
-                P_vt_lp,
-                shed_ev,
-                shed_vt,
-                shadow_prices,
-                shared_power_residuals,
-            ) = charging.solve_shared_power_inventory_lp(data, e_dep, load_agg["E_ev_req"])
-        except Exception:
+
+        shadow_prices = {s: {t: 0.0 for t in times} for s in stations}
+        shed_ev = {s: {t: 0.0 for t in times} for s in stations}
+        shed_vt = {s: {t: 0.0 for t in times} for s in stations}
+        shared_power_residuals = {"INV3": 0.0}
+        B_vt_lp = {s: {t: 0.0 for t in times} for s in stations}
+        P_vt_lp = {s: {t: 0.0 for t in times} for s in stations}
+
+        if surcharge_method == "shadow_lp":
+            try:
+                (
+                    B_vt_lp,
+                    P_vt_lp,
+                    shed_ev,
+                    shed_vt,
+                    shadow_prices,
+                    shared_power_residuals,
+                ) = charging.solve_shared_power_inventory_lp(data, e_dep, ev_energy_kwh)
+                for s in stations:
+                    B_vt_lp.setdefault(s, {t: 0.0 for t in times})
+                    P_vt_lp.setdefault(s, {t: 0.0 for t in times})
+                lp_ok = True
+                diagnostics["shared_power_solver_used"] = charging.LAST_SHARED_SOLVER_USED
+            except Exception as exc:
+                fallback_used = True
+                diagnostics["shared_power_fallback"] = str(exc)
+        else:
             fallback_used = True
-            shadow_prices = {s: {t: 0.0 for t in times} for s in stations}
-            shed_ev = {s: {t: 0.0 for t in times} for s in stations}
-            shed_vt = {s: {t: 0.0 for t in times} for s in stations}
-            shared_power_residuals = {"INV3": 0.0}
+
+        if (not lp_ok) or surcharge_method != "shadow_lp":
             beta = float(config.get("surcharge_beta", 2.0))
             surcharge_kappa = float(config.get("surcharge_kappa", 0.5))
             for s in stations:
                 for t in times:
-                    p_site = max(1e-6, float(station_params[s]["P_site"][t]))
-                    util_power = (p_ev_req[s][t] + p_vt_req[s][t]) / p_site
-                    overload = max(0.0, util_power - 1.0)
-                    shadow_prices[s][t] = surcharge_kappa * electricity_price[s][t] * delta_t * overload
-                    shed_ev[s][t] = max(0.0, p_ev_req[s][t] - p_site)
-                    shed_vt[s][t] = max(0.0, p_vt_req[s][t] - max(0.0, p_site - p_ev_req[s][t]))
+                    base_price = max(1.0e-6, float(electricity_price[s][t]))
+                    p_site_raw = float(station_params[s]["P_site"][t])
+                    p_site_den = _safe_den(p_site_raw)
+                    overload = max(0.0, (p_ev_req[s][t] + p_vt_req[s][t]) / p_site_den - 1.0)
+                    raw_surcharge_old = base_price * surcharge_kappa * (overload ** beta)
+                    mu_kw = raw_surcharge_old * delta_t
+                    shadow_prices[s][t] = mu_kw
+                    ev_served_kw = min(max(0.0, p_ev_req[s][t]), max(0.0, p_site_raw))
+                    vt_served_kw = max(0.0, p_site_raw - ev_served_kw)
+                    P_vt_lp[s][t] = min(vt_served_kw, p_vt_req[s][t])
+                    shed_ev[s][t] = max(0.0, p_ev_req[s][t] - p_site_raw)
+                    shed_vt[s][t] = max(0.0, p_vt_req[s][t] - P_vt_lp[s][t]) * delta_t
                     shared_power_residuals["INV3"] = max(
                         shared_power_residuals["INV3"],
-                        max(0.0, p_ev_req[s][t] + p_vt_req[s][t] - p_site),
+                        max(0.0, ev_served_kw + P_vt_lp[s][t] - p_site_raw),
                     )
+            diagnostics["shared_power_solver_used"] = "fallback_overload"
 
-        shadow_scale = float(config.get("shadow_price_scale", 1.0))
-        cap_mult = float(config.get("shadow_price_cap_mult", 10.0))
+        vt_service_prob_target = {s: {t: 1.0 for t in times} for s in stations}
+        shed_ratio_map = {s: {t: 0.0 for t in times} for s in stations}
+        cap_binding_map = {s: {t: False for t in times} for s in stations}
+
         for s in stations:
             for t in times:
-                p_site = max(1e-6, float(station_params[s]["P_site"][t]))
-                ratio_req = (p_ev_req[s][t] + p_vt_req[s][t]) / p_site
-                raw = shadow_scale * shadow_prices[s][t] / max(1e-6, delta_t)
-                cap = cap_mult * max(1e-6, electricity_price[s][t])
+                base_price = max(1.0e-6, float(electricity_price[s][t]))
+                p_site_raw = float(station_params[s]["P_site"][t])
+                p_site_den = _safe_den(p_site_raw)
+                mu_kw = shadow_prices[s][t]
+                raw = shadow_scale * mu_kw / max(1e-6, delta_t)
+                cap = cap_mult * base_price
                 raw_surcharge[s][t] = min(raw, cap)
-                diagnostics["power_tightness"].setdefault(s, {})[t] = {
-                    "P_ev_req": p_ev_req[s][t],
-                    "P_vt_req": p_vt_req[s][t],
-                    "P_site": p_site,
-                    "ratio_req": ratio_req,
-                    "shed_ev": (shed_ev or {}).get(s, {}).get(t, 0.0),
-                    "shed_vt": (shed_vt or {}).get(s, {}).get(t, 0.0),
-                    "shadow_mu_kw": shadow_prices[s][t],
-                    "raw_surcharge": raw_surcharge[s][t],
-                    "fallback_used": fallback_used,
-                    "shared_solver": charging.LAST_SHARED_SOLVER_USED,
-                }
+                cap_binding_map[s][t] = raw_surcharge[s][t] >= cap - 1.0e-9
+
+                req_e_vt = float(e_vt_req.get(s, {}).get(t, 0.0))
+                shed_vt_kwh = float((shed_vt or {}).get(s, {}).get(t, 0.0))
+                if req_e_vt <= 1.0e-9:
+                    target_prob = 1.0
+                    shed_ratio = 0.0
+                else:
+                    shed_ratio = min(1.0, max(0.0, shed_vt_kwh / max(1.0e-9, req_e_vt)))
+                    target_prob = max(float(config["vt_reliability_floor"]), 1.0 - shed_ratio)
+                vt_service_prob_target[s][t] = target_prob
+                shed_ratio_map[s][t] = shed_ratio
 
         prev_surcharge = {s: {t: energy_surcharge[s][t] for t in times} for s in stations}
         alpha_override = config.get("surcharge_msa_alpha")
         alpha = float(alpha_override) if alpha_override is not None else 1.0 / (iteration + 1.0)
+        alpha_vt = config.get("vt_reliability_alpha")
+        alpha_vt = float(alpha_vt) if alpha_vt is not None else alpha
+
         for s in stations:
             for t in times:
                 energy_surcharge[s][t] = (1.0 - alpha) * energy_surcharge[s][t] + alpha * raw_surcharge[s][t]
+                vt_service_prob[s][t] = (1.0 - alpha_vt) * vt_service_prob[s][t] + alpha_vt * vt_service_prob_target[s][t]
+                base_price = max(1.0e-6, float(electricity_price[s][t]))
+                p_site_raw = float(station_params[s]["P_site"][t])
+                p_site_den = _safe_den(p_site_raw)
+                p_ev_served_kw = max(0.0, p_ev_req[s][t] - (shed_ev or {}).get(s, {}).get(t, 0.0))
+                p_vt_served_kw = (P_vt_lp or {}).get(s, {}).get(t, 0.0)
+                diagnostics["power_tightness"].setdefault(s, {})[t] = {
+                    "P_site_raw": p_site_raw,
+                    "P_site_den": p_site_den,
+                    "ratio_req": (p_ev_req[s][t] + p_vt_req[s][t]) / p_site_den,
+                    "mu_kw": shadow_prices[s][t],
+                    "raw_surcharge": raw_surcharge[s][t],
+                    "surcharge_smoothed": energy_surcharge[s][t],
+                    "cap": cap_mult * base_price,
+                    "cap_binding": cap_binding_map[s][t],
+                    "shed_ev_kw": (shed_ev or {}).get(s, {}).get(t, 0.0),
+                    "shed_vt_kwh": (shed_vt or {}).get(s, {}).get(t, 0.0),
+                    "p_ev_served_kw": p_ev_served_kw,
+                    "p_vt_served_kw": p_vt_served_kw,
+                    "p_net_served_kw": p_ev_served_kw + p_vt_served_kw,
+                    "vt_service_prob_target": vt_service_prob_target[s][t],
+                    "vt_service_prob": vt_service_prob[s][t],
+                    "shed_ratio": shed_ratio_map[s][t],
+                    "fallback_used": fallback_used,
+                }
 
         dprice = max(
             abs(energy_surcharge[s][t] - prev_surcharge[s][t]) for s in stations for t in times
@@ -540,7 +674,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         y = {m: {s: {t: 0 for t in times} for s in stations} for m in data["sets"]["vehicles"]}
         charging_residuals = {"SKIPPED": 0.0}
         B_vt = B_vt_lp or {}
-        P_vt = {dep: {t: load_agg.get("P_vt_req", {}).get(dep, {}).get(t, 0.0) for t in times} for dep in load_agg.get("P_vt_req", {})}
+        if lp_ok and P_vt_lp:
+            P_vt = P_vt_lp
+        else:
+            P_vt = {dep: {t: load_agg.get("P_vt_req", {}).get(dep, {}).get(t, 0.0) for t in times} for dep in load_agg.get("P_vt_req", {})}
         inv_residuals = shared_power_residuals or {}
 
     cap_violation = 0.0
@@ -551,6 +688,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 cap_violation = max(cap_violation, max(0.0, time_map[t] - cap_pax[dep][t]))
 
     power_violation = 0.0
+    power_mode = str(config.get("power_violation_mode", "net"))
     for s in stations:
         for t in times:
             if run_dispatch:
@@ -558,20 +696,26 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 if P_vt and s in P_vt:
                     total_power += P_vt[s][t]
             else:
-                total_power = load_agg.get("P_total_req", {}).get(s, {}).get(t, 0.0)
+                if power_mode == "request":
+                    total_power = load_agg.get("P_total_req", {}).get(s, {}).get(t, 0.0)
+                else:
+                    p_ev_served = max(0.0, p_ev_req[s][t] - (shed_ev or {}).get(s, {}).get(t, 0.0))
+                    p_vt_served = (P_vt_lp or {}).get(s, {}).get(t, p_vt_req[s][t])
+                    total_power = p_ev_served + p_vt_served
             power_violation = max(power_violation, max(0.0, total_power - station_params[s]["P_site"][t]))
 
     inflow_total, outflow_total = boundary_flows(
         arc_flows, data["parameters"]["boundary_in"], data["parameters"]["boundary_out"], times
     )
+    g_used_by_time = {t: g_series[min(idx, len(g_series) - 1)] for idx, t in enumerate(times)}
     cbd_tau = {}
     for arc, params in arc_params.items():
         if params.get("type") != "CBD":
             continue
         theta = float(params.get("theta", 1.0))
         cbd_tau[arc] = {}
-        for idx, t in enumerate(times):
-            g_t = g_series[min(idx, len(g_series) - 1)]
+        for t in times:
+            g_t = g_used_by_time[t]
             cbd_tau[arc][t] = float(params["tau0"]) * g_t * theta
 
     results = {
@@ -610,8 +754,12 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "boundary_outflow": {t: outflow_total[idx] for idx, t in enumerate(times)},
             "n_series": {idx: n_series[idx] for idx in range(len(n_series))},
             "g_series": {idx: g_series[idx] for idx in range(len(g_series))},
+            "g_state_series": [float(v) for v in g_series],
+            "g_used_by_time": g_used_by_time,
             "cbd_tau": cbd_tau,
+            "cbd_tau_used": cbd_tau,
             "station_loads": load_agg,
+            "vt_service_prob": vt_service_prob,
         },
         "charging": {
             "E": E,
@@ -621,6 +769,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         },
         "solver_used": charging.LAST_SOLVER_USED if run_dispatch else "aggregate",
     }
+    audit = self_audit(results, config)
+    results["SelfAudit"] = audit
+    if bool(config.get("strict_audit", True)) and audit.get("warnings"):
+        diagnostics["audit_warnings"] = audit["warnings"]
     return results, residuals
 
 
@@ -689,10 +841,13 @@ def main() -> None:
         "equilibrium": {
             "C1": residuals["C1"],
             "C2": residuals["C2"],
+            "C2_rel": residuals.get("C2_rel", 0.0),
+            "C2_raw": residuals.get("C2_raw", 0.0),
             "C7": residuals["C7"],
             "C8": residuals["C8"],
             "C9": residuals["C9"],
             "C10": residuals["C10"],
+            "C10_raw": residuals.get("C10_raw", 0.0),
             "C11": residuals["C11"],
         },
         "Surcharge": results["surcharge_power"],
@@ -712,21 +867,45 @@ def main() -> None:
             "boundary_outflow": results["diagnostics"].get("boundary_outflow"),
             "n_series": results["diagnostics"].get("n_series"),
             "g_series": results["diagnostics"].get("g_series"),
+            "g_state_series": results["diagnostics"].get("g_state_series"),
+            "g_used_by_time": results["diagnostics"].get("g_used_by_time"),
             "cbd_tau": cbd_tau_one,
+            "shared_power_solver_used": results["diagnostics"].get("shared_power_solver_used"),
+            "vt_service_prob": results["diagnostics"].get("vt_service_prob", {}),
         },
+        "SelfAudit": results.get("SelfAudit", {}),
     }
     g_vals = list((results["diagnostics"].get("g_series") or {}).values())
     g_range = (max(g_vals) - min(g_vals)) if g_vals else 0.0
-    high_vt_share = (
-        mode_share_last.get("shares", {}).get("high", {}).get("vt")
-        if isinstance(mode_share_last, dict)
-        else None
+    peak_t = report["Diagnostics"].get("peak_t")
+    shares = mode_share_last.get("shares", {}) if isinstance(mode_share_last, dict) else {}
+    peak_station = next(iter(results["diagnostics"].get("power_tightness", {})), None)
+    cap_binding_peak = False
+    vt_prob_peak = None
+    if peak_station is not None and peak_t is not None:
+        pt = results["diagnostics"].get("power_tightness", {}).get(peak_station, {}).get(peak_t, {})
+        cap_binding_peak = bool(pt.get("cap_binding", False))
+        vt_prob_peak = pt.get("vt_service_prob")
+    print(
+        "摘要行: "
+        f"iter_count={results['convergence'].get('iterations')} | "
+        f"max_surcharge={max_surcharge:.6f} | "
+        f"peak_t={peak_t} | "
+        f"shares(high/k1/low/mid)="
+        f"high(ev={shares.get('high',{}).get('ev',0.0):.4f},vt={shares.get('high',{}).get('vt',0.0):.4f}),"
+        f"k1(ev={shares.get('k1',{}).get('ev',0.0):.4f},vt={shares.get('k1',{}).get('vt',0.0):.4f}),"
+        f"low(ev={shares.get('low',{}).get('ev',0.0):.4f},vt={shares.get('low',{}).get('vt',0.0):.4f}),"
+        f"mid(ev={shares.get('mid',{}).get('ev',0.0):.4f},vt={shares.get('mid',{}).get('vt',0.0):.4f}) | "
+        f"residuals(C1,C2,C2_rel,C10,C11)=({residuals.get('C1',0.0):.3e},{residuals.get('C2',0.0):.3e},{residuals.get('C2_rel',0.0):.3e},{residuals.get('C10',0.0):.3e},{residuals.get('C11',0.0):.3e}) | "
+        f"shared_power_solver_used={results['diagnostics'].get('shared_power_solver_used')} | "
+        f"cap_binding@peak_t={cap_binding_peak} | "
+        f"vt_service_prob@peak_t={vt_prob_peak}"
     )
     print(
         "论文摘要: "
         f"收敛于 iter={results['convergence'].get('iterations')}；"
         f"峰值 surcharge={max_surcharge:.4f}；"
-        f"高VoT@peak_t 的 eVTOL share={0.0 if high_vt_share is None else high_vt_share:.4f}；"
+        f"高VoT@peak_t 的 eVTOL share={shares.get('high',{}).get('vt',0.0):.4f}；"
         f"CBD g(t) 变化范围={g_range:.6f}"
     )
     print(json.dumps(report, indent=2))

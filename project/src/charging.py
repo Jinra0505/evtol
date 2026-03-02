@@ -11,6 +11,7 @@ except ImportError:
 
 LAST_SOLVER_USED = "unknown"
 LAST_SHARED_SOLVER_USED = "unknown"
+LAST_SHARED_POWER_SOLVER_USED = "unknown"
 
 
 def compute_station_loads_from_flows(
@@ -73,12 +74,14 @@ def _solve_shared_power_core(
     Dict[str, Dict[int, float]],
     Dict[str, float],
 ]:
-    global LAST_SHARED_SOLVER_USED
+    global LAST_SHARED_SOLVER_USED, LAST_SHARED_POWER_SOLVER_USED
     if not HAS_GUROBI:
         LAST_SHARED_SOLVER_USED = "heuristic"
+        LAST_SHARED_POWER_SOLVER_USED = "heuristic"
         return _solve_shared_power_core_heuristic(data, times, e_dep, ev_energy)
 
     LAST_SHARED_SOLVER_USED = "gurobi"
+    LAST_SHARED_POWER_SOLVER_USED = "gurobi"
 
     stations = data["sets"]["stations"]
     delta_t = data["meta"]["delta_t"]
@@ -197,6 +200,9 @@ def _solve_shared_power_core_heuristic(
     Dict[str, Dict[int, float]],
     Dict[str, float],
 ]:
+    global LAST_SHARED_SOLVER_USED, LAST_SHARED_POWER_SOLVER_USED
+    LAST_SHARED_SOLVER_USED = "heuristic"
+    LAST_SHARED_POWER_SOLVER_USED = "heuristic"
     stations = data["sets"]["stations"]
     delta_t = data["meta"]["delta_t"]
     station_params = data["parameters"]["stations"]

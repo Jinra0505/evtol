@@ -84,9 +84,9 @@ def compute_itinerary_costs(
             if it.get("mode") == "eVTOL" and dep_station is not None:
                 if flight_time.get(t, 0.0) <= 0.0:
                     costs[it["id"]][t] = {
-                        "TT": 1.0e12,
-                        "Money": 1.0e12,
-                        "ChargeCost": 1.0e12,
+                        "TT": float("inf"),
+                        "Money": float("inf"),
+                        "ChargeCost": 0.0,
                     }
                     continue
                 if dep_station not in station_waits or t not in station_waits[dep_station]:
@@ -111,6 +111,9 @@ def logit_assignment(
     vot: Dict[str, Dict[int, float]],
     lambdas: Dict[str, float],
     times: List[int],
+    vt_service_prob: Dict[str, Dict[int, float]] | None = None,
+    vt_service_prob_floor: float = 1.0e-4,
+    vt_service_prob_skip_below: float = 0.0,
 ) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
     all_groups = sorted({g for od_groups in demand.values() for g in od_groups.keys()})
     flows: Dict[str, Dict[str, Dict[int, float]]] = {
@@ -140,16 +143,32 @@ def logit_assignment(
                     available_alts.append(it)
                 if not available_alts:
                     raise ValueError(f"No available itineraries for OD {od_key} at t={t}")
+                feasible_alts = []
                 for it in available_alts:
                     comp = costs[it["id"]][t]
                     gen_cost = vot[group][t] * comp["TT"] + comp["Money"] + comp["ChargeCost"]
                     generalized_costs[it["id"]][group][t] = gen_cost
-                    cost_values.append(-lambdas[group] * gen_cost)
-                log_denom = logsumexp(cost_values)
+                    if math.isinf(gen_cost):
+                        continue
+
+                    service_prob = 1.0
+                    if it.get("mode") == "eVTOL":
+                        dep_station = it.get("dep_station")
+                        if vt_service_prob and dep_station in vt_service_prob:
+                            service_prob = float(vt_service_prob[dep_station].get(t, 1.0))
+                        service_prob = min(1.0, max(vt_service_prob_floor, service_prob))
+                        if vt_service_prob_skip_below > 0.0 and service_prob < vt_service_prob_skip_below:
+                            continue
+
+                    utility = math.log(service_prob) - lambdas[group] * gen_cost
+                    feasible_alts.append((it, utility))
                 total_demand = time_map.get(t, 0.0)
                 if total_demand <= 0.0:
                     continue
-                for it, util in zip(available_alts, cost_values):
+                if not feasible_alts:
+                    continue
+                log_denom = logsumexp(util for _, util in feasible_alts)
+                for it, util in feasible_alts:
                     share = math.exp(util - log_denom)
                     flows[it["id"]][group][t] = total_demand * share
     return flows, generalized_costs
