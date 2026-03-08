@@ -11,9 +11,12 @@ except ImportError:
     HAS_GUROBI = False
 
 HAS_SCIPY = True
+SCIPY_VERSION = None
 try:
     import numpy as np
+    import scipy
     from scipy.optimize import linprog
+    SCIPY_VERSION = getattr(scipy, "__version__", "unknown")
 except Exception:
     HAS_SCIPY = False
 
@@ -37,8 +40,8 @@ def compute_station_loads_from_flows(
     """Aggregate EV/eVTOL station loads directly from itinerary flows.
 
     Returns a dictionary with:
-    - E_ev_req[s][t], P_ev_req[s][t]
-    - E_vt_req[s][t], P_vt_req[s][t]
+    - E_ev_req[s][t], P_ev_req_kw[s][t]
+    - E_vt_req[s][t], P_vt_req_kw_energy[s][t], P_vt_req_kw_grid[s][t]
     - P_total_req[s][t]
     """
     stations = data["sets"]["stations"]
@@ -52,7 +55,8 @@ def compute_station_loads_from_flows(
     E_ev_req = {s: {t: 0.0 for t in times} for s in stations}
     E_vt_req = {s: {t: 0.0 for t in times} for s in stations}
     P_ev_req = {s: {t: 0.0 for t in times} for s in stations}
-    P_vt_req = {s: {t: 0.0 for t in times} for s in stations}
+    P_vt_req_energy = {s: {t: 0.0 for t in times} for s in stations}
+    P_vt_req_grid = {s: {t: 0.0 for t in times} for s in stations}
     P_total_req = {s: {t: 0.0 for t in times} for s in stations}
 
     for s in stations:
@@ -63,14 +67,18 @@ def compute_station_loads_from_flows(
             eta = 1.0
             if s in data["parameters"].get("vertiport_storage", {}):
                 eta = max(1e-6, float(data["parameters"]["vertiport_storage"][s].get("eta_ch", 1.0)))
-            P_vt_req[s][t] = E_vt_req[s][t] / (eta * delta_t) if delta_t > 0 else 0.0
-            P_total_req[s][t] = P_ev_req[s][t] + P_vt_req[s][t]
+            P_vt_req_energy[s][t] = E_vt_req[s][t] / delta_t if delta_t > 0 else 0.0
+            P_vt_req_grid[s][t] = E_vt_req[s][t] / (eta * delta_t) if delta_t > 0 else 0.0
+            P_total_req[s][t] = P_ev_req[s][t] + P_vt_req_grid[s][t]
 
     return {
         "E_ev_req": E_ev_req,
         "E_vt_req": E_vt_req,
         "P_ev_req": P_ev_req,
-        "P_vt_req": P_vt_req,
+        "P_ev_req_kw": P_ev_req,
+        "P_vt_req": P_vt_req_grid,
+        "P_vt_req_kw_energy": P_vt_req_energy,
+        "P_vt_req_kw_grid": P_vt_req_grid,
         "P_total_req": P_total_req,
     }
 
@@ -223,6 +231,7 @@ def solve_shared_power_inventory_highs(
     Dict[str, Dict[int, float]],
     Dict[str, Dict[int, float]],
     Dict[str, float],
+    Dict[str, Any],
 ]:
     global LAST_SHARED_SOLVER_USED, LAST_SHARED_POWER_SOLVER_USED
     if not HAS_SCIPY:
@@ -375,11 +384,38 @@ def solve_shared_power_inventory_highs(
 
     # HiGHS dual (marginal) of station power constraint is converted to nonnegative scarcity value mu_kw ($/kW).
     shadow_prices = {s: {t: None for t in times} for s in stations}
+    dual_trace = {s: {t: {"label": f"cap_constraint[{s},{t}]", "dual_raw": None, "mu_kw": None} for t in times} for s in stations}
     marg = getattr(getattr(res, "ineqlin", None), "marginals", None)
     if marg is not None:
         for s, t, ridx in cap_rows:
             m = float(marg[ridx])
-            shadow_prices[s][t] = -m if m < 0.0 else m
+            mu = -m if m < 0.0 else m
+            shadow_prices[s][t] = mu
+            dual_trace[s][t] = {
+                "label": f"cap_constraint[{s},{t}]",
+                "dual_raw": m,
+                "mu_kw": mu,
+            }
+
+    objective_components = {s: {t: {"energy_cost_term": 0.0, "ev_shed_penalty": 0.0, "vt_shed_penalty": 0.0} for t in times} for s in stations}
+    total_energy_cost = 0.0
+    total_ev_shed_penalty = 0.0
+    total_vt_shed_penalty = 0.0
+    for s in stations:
+        for t in times:
+            p_vt_sum = sum(P_out.get(dep, {}).get(t, 0.0) for dep in deps if dep == s)
+            p_ev_served = max(0.0, p_ev_req_kw[s][t] - shed_ev_out[s][t])
+            energy_cost_term = float(prices[s][t]) * (p_ev_served + p_vt_sum) * delta_t
+            ev_pen = voll_ev_per_kwh * shed_ev_out[s][t] * delta_t
+            vt_pen = voll_vt_per_kwh * sum(shed_vt_out.get(dep, {}).get(t, 0.0) for dep in deps if dep == s)
+            objective_components[s][t] = {
+                "energy_cost_term": energy_cost_term,
+                "ev_shed_penalty": ev_pen,
+                "vt_shed_penalty": vt_pen,
+            }
+            total_energy_cost += energy_cost_term
+            total_ev_shed_penalty += ev_pen
+            total_vt_shed_penalty += vt_pen
 
     residuals = {"INV1": 0.0, "INV2": 0.0, "INV3": 0.0, "INV4": 0.0}
     for dep in deps:
@@ -403,7 +439,18 @@ def solve_shared_power_inventory_highs(
             )
             residuals["INV4"] = max(residuals["INV4"], max(0.0, shed_ev_out[s][t]))
 
-    return B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals
+    lp_diag = {
+        "objective_components": objective_components,
+        "objective_totals": {
+            "energy_cost_term": total_energy_cost,
+            "ev_shed_penalty": total_ev_shed_penalty,
+            "vt_shed_penalty": total_vt_shed_penalty,
+            "total_objective": total_energy_cost + total_ev_shed_penalty + total_vt_shed_penalty,
+        },
+        "dual_trace": dual_trace,
+    }
+
+    return B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals, lp_diag
 
 
 def _solve_shared_power_core(
@@ -419,6 +466,7 @@ def _solve_shared_power_core(
     Dict[str, Dict[int, float]],
     Dict[str, Dict[int, float]],
     Dict[str, float],
+    Dict[str, Any],
 ]:
     global LAST_SHARED_SOLVER_USED, LAST_SHARED_POWER_SOLVER_USED
     solver_pref = str(data.get("config", {}).get("shared_power_solver", "highs")).lower()
@@ -451,6 +499,7 @@ def _solve_shared_power_core_heuristic(
     Dict[str, Dict[int, float]],
     Dict[str, Dict[int, float]],
     Dict[str, float],
+    Dict[str, Any],
 ]:
     raise RuntimeError("Heuristic shared-power solver is disabled; use HiGHS LP.")
 
@@ -488,7 +537,7 @@ def solve_shared_power_inventory_lp(
 ]:
     times = data["sets"]["time"]
     stations = set(data["sets"]["stations"])
-    B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals = _solve_shared_power_core(data, times, e_dep, ev_energy)
+    B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals, lp_diag = _solve_shared_power_core(data, times, e_dep, ev_energy)
 
     key_mismatch = 0.0
     for dep in B_out.keys():
@@ -500,7 +549,7 @@ def solve_shared_power_inventory_lp(
             key_mismatch = 1.0
             raise ValueError(f"Shared-power output key mismatch: dep={dep} not in stations")
     residuals["KEY_MISMATCH"] = key_mismatch
-    return B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals
+    return B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals, lp_diag
 
 
 def solve_charging(
