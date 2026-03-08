@@ -113,7 +113,7 @@ def logit_assignment(
     times: List[int],
     vt_service_prob: Dict[str, Dict[int, float]] | None = None,
     vt_service_prob_floor: float = 1.0e-4,
-    vt_reliability_gamma: float = 1.0,
+    vt_reliability_gamma: float = 0.0,
     vt_service_prob_skip_below: float = 0.0,
 ) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
     all_groups = sorted({g for od_groups in demand.values() for g in od_groups.keys()})
