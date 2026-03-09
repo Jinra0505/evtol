@@ -114,6 +114,7 @@ def logit_assignment(
     vt_service_prob: Dict[str, Dict[int, float]] | None = None,
     ev_service_prob: Dict[str, Dict[int, float]] | None = None,
     vt_service_prob_floor: float = 1.0e-4,
+    ev_service_prob_floor: float = 1.0e-4,
     vt_reliability_gamma: float = 0.0,
     ev_reliability_gamma: float = 0.0,
     vt_service_prob_skip_below: float = 0.0,
@@ -169,7 +170,7 @@ def logit_assignment(
                             s0 = station_entries[0].get("station")
                             if ev_service_prob and s0 in ev_service_prob:
                                 ev_prob = float(ev_service_prob[s0].get(t, 1.0))
-                        ev_prob = min(1.0, max(vt_service_prob_floor, ev_prob))
+                        ev_prob = min(1.0, max(ev_service_prob_floor, ev_prob))
 
                     utility = (
                         vt_reliability_gamma * math.log(service_prob)

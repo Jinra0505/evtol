@@ -354,6 +354,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     config.setdefault("vt_reliability_gamma", 0.0)
     config.setdefault("ev_reliability_gamma", 0.0)
     config.setdefault("max_iter_auto_extend", 0)
+    config.setdefault("max_total_iter", 800)
+    config.setdefault("auto_extend_step", 100)
+    config.setdefault("ev_reliability_floor", config.get("vt_reliability_floor", 0.05))
     config.setdefault("strict_audit", True)
     config.setdefault("audit_raise", False)
     config.setdefault("shared_power_solver", "highs")
@@ -397,6 +400,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "mode_share": [],
         "surcharge_history": [],
         "mode_share_by_group": [],
+        "power_tightness_summary_history": [],
         "power_tightness": {},
         "shared_power_solver_used": "unknown",
         "module_paths": {
@@ -434,9 +438,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     u_new = utilization
     good_count = 0
     current_max_iter = int(config["max_iter"])
-    auto_extend = int(config.get("max_iter_auto_extend", 0))
+    auto_extend = int(config.get("auto_extend_step", config.get("max_iter_auto_extend", 0)))
+    max_total_iter = int(config.get("max_total_iter", 800))
     iteration = 0
-    while iteration < current_max_iter:
+    while iteration < current_max_iter and iteration < max_total_iter:
         last_iteration = iteration + 1
         g_by_time = {t: g_series[min(len(g_series) - 1, idx)] for idx, t in enumerate(times)}
         tau = compute_road_times(arc_flows, arc_params, g_by_time, times)
@@ -469,6 +474,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             vt_service_prob=vt_service_prob,
             ev_service_prob=ev_service_prob,
             vt_service_prob_floor=1.0e-4,
+            ev_service_prob_floor=float(config.get("ev_reliability_floor", 0.05)),
             vt_reliability_gamma=float(config["vt_reliability_gamma"]),
             ev_reliability_gamma=float(config.get("ev_reliability_gamma", 0.0)),
             vt_service_prob_skip_below=float(config["vt_reliability_skip_below"]),
@@ -563,7 +569,14 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             for t in times:
                 base_price = max(1.0e-6, float(electricity_price[s][t]))
                 cap_abs = config.get("shadow_price_cap_abs")
-                cap = float(cap_abs) if cap_abs is not None else cap_mult * base_price
+                cap_mult_value = cap_mult * base_price
+                cap_abs_value = float(cap_abs) if cap_abs is not None else None
+                if cap_abs_value is not None:
+                    cap = min(cap_abs_value, cap_mult_value)
+                    cap_mode = "min(abs,mult)"
+                else:
+                    cap = cap_mult_value
+                    cap_mode = "mult"
                 mu_kw = shadow_prices[s][t]
                 if diagnostics.get("shared_power_solver_used") == "highs":
                     raw = shadow_scale * float(mu_kw or 0.0) / max(1e-9, delta_t)
@@ -638,7 +651,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 vt_prob_from_shed = min(1.0, max(0.0, 1.0 - current_shed_ratio))
                 ev_req_den = max(1.0e-9, float(p_ev_req_kw))
                 ev_prob_from_shed = 1.0 - float((shed_ev or {}).get(s, {}).get(t, 0.0)) / ev_req_den
-                ev_floor = float(config.get("vt_reliability_floor", 0.05))
+                ev_floor = float(config.get("ev_reliability_floor", 0.05))
                 ev_prob_from_shed = min(1.0, max(ev_floor, ev_prob_from_shed))
                 ev_service_prob[s][t] = ev_prob_from_shed
                 solver_used = diagnostics.get("shared_power_solver_used")
@@ -664,6 +677,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     "heuristic_surcharge": _clean_number(heuristic_surcharge[s][t]) if solver_used != "highs" else None,
                     "surcharge_smoothed": _clean_number(energy_surcharge[s][t]),
                     "cap": cap_mult * base_price,
+                    "cap_used": cap,
+                    "cap_mult_value": cap_mult_value,
+                    "cap_abs_value": cap_abs_value,
+                    "cap_mode": cap_mode,
                     "cap_binding": cap_binding_map[s][t],
                     "E_vt_req_kwh": e_vt_req[s][t],
                     "P_vt_charge_kw": p_vt_served_kw,
@@ -690,6 +707,21 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         diagnostics["dn_history"].append(dn)
         diagnostics["dprice_history"].append(dprice)
         diagnostics["max_surcharge_history"].append(max_surcharge)
+
+        peak_entries = [diagnostics["power_tightness"].get(s, {}).get(peak_t, {}) for s in stations]
+        if peak_entries:
+            bind_ratio = sum(1.0 for e in peak_entries if e.get("cap_binding")) / max(1, len(peak_entries))
+            avg_vt_prob = sum(float(e.get("vt_service_prob", 1.0)) for e in peak_entries) / max(1, len(peak_entries))
+            avg_ev_prob = sum(float(e.get("ev_service_prob", 1.0)) for e in peak_entries) / max(1, len(peak_entries))
+            avg_ratio_req = sum(float(e.get("ratio_req_exogenous", 0.0)) for e in peak_entries) / max(1, len(peak_entries))
+            diagnostics["power_tightness_summary_history"].append({
+                "iteration": iteration + 1,
+                "peak_t": peak_t,
+                "cap_binding_ratio": bind_ratio,
+                "avg_vt_service_prob": avg_vt_prob,
+                "avg_ev_service_prob": avg_ev_prob,
+                "avg_ratio_req_exogenous": avg_ratio_req,
+            })
 
         snapshot = {
             "iteration": iteration + 1,
@@ -812,10 +844,13 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 stop_reason = "patience"
                 break
 
-        if iteration + 1 >= current_max_iter and dx > config["tol"] and auto_extend > 0 and current_max_iter < 1000:
-            current_max_iter = min(1000, current_max_iter + auto_extend)
+        if iteration + 1 >= current_max_iter and good_count < patience and auto_extend > 0 and current_max_iter < max_total_iter:
+            current_max_iter = min(max_total_iter, min(1000, current_max_iter + auto_extend))
 
         iteration += 1
+
+    if stop_reason != "patience":
+        stop_reason = "max_total_iter" if iteration >= max_total_iter else "max_iters"
 
     residuals = compute_residuals(
         data,

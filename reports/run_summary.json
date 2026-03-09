@@ -1,0 +1,34 @@
+{
+  "report_larger_case.json": {
+    "iter_count": 154,
+    "stop_reason": "patience",
+    "max_surcharge": 2.5999999999999974,
+    "peak_t": 5,
+    "solver": "highs",
+    "self_audit_ok": true
+  },
+  "report_mega_case.json": {
+    "iter_count": 372,
+    "stop_reason": "patience",
+    "max_surcharge": 1.5600000000000003,
+    "peak_t": 5,
+    "solver": "highs",
+    "self_audit_ok": true
+  },
+  "report_synth_case.json": {
+    "iter_count": 800,
+    "stop_reason": "max_total_iter",
+    "max_surcharge": 2.5999999999999996,
+    "peak_t": 5,
+    "solver": "highs",
+    "self_audit_ok": true
+  },
+  "report_synth_tuned.json": {
+    "iter_count": 800,
+    "stop_reason": "max_total_iter",
+    "max_surcharge": 2.0799999999999996,
+    "peak_t": 5,
+    "solver": "highs",
+    "self_audit_ok": true
+  }
+}
