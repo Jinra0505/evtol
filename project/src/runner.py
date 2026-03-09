@@ -61,6 +61,21 @@ def _safe_den(x: Any, eps: float = 1.0e-6) -> float:
     return val if val > 0.0 else eps
 
 
+
+
+def _compute_cap_values(base_price: float, config: Dict[str, Any]) -> Tuple[float, float | None, float | None, str]:
+    cap_mult = config.get("shadow_price_cap_mult")
+    cap_abs = config.get("shadow_price_cap_abs")
+    cap_mult_value = float(cap_mult) * float(base_price) if cap_mult is not None else None
+    cap_abs_value = float(cap_abs) if cap_abs is not None else None
+    if cap_mult_value is not None and cap_abs_value is not None:
+        return min(cap_abs_value, cap_mult_value), cap_mult_value, cap_abs_value, "min(abs,mult)"
+    if cap_abs_value is not None:
+        return cap_abs_value, None, cap_abs_value, "abs"
+    if cap_mult_value is not None:
+        return cap_mult_value, cap_mult_value, None, "mult"
+    return float("inf"), None, None, "none"
+
 def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     floor = float(config.get("vt_reliability_floor", 0.05))
     warnings: List[str] = []
@@ -105,6 +120,19 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
                 cap_binding = True
             if uncapped_entry is not None and cap > 0.0 and uncapped > 100.0 * cap:
                 warnings.append(f"uncapped surcharge very large at {station},{t}; report VOLL and capped surcharge")
+
+            cap_used = float(entry.get("cap_used", entry.get("cap", 0.0)))
+            cap_field = float(entry.get("cap", cap_used))
+            if abs(cap_field - cap_used) > 1.0e-9:
+                severe.append(f"cap/cap_used mismatch at {station},{t}")
+            unc = entry.get("raw_surcharge_uncapped")
+            bind_expected = False
+            if unc is not None:
+                bind_expected = float(unc) > cap_used - 1.0e-9
+            else:
+                bind_expected = float(entry.get("raw_surcharge", 0.0)) >= cap_used - 1.0e-9
+            if bool(entry.get("cap_binding", False)) != bool(bind_expected):
+                severe.append(f"cap_binding mismatch at {station},{t}")
 
             vt_prob = float(entry.get("vt_service_prob", 1.0))
             if vt_prob < floor - 1.0e-8 or vt_prob > 1.0 + 1.0e-8:
@@ -157,7 +185,7 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     c2 = float(results.get("residuals", {}).get("C2", 0.0))
     c2_raw = float(results.get("residuals", {}).get("C2_raw", 0.0))
     if c2_raw <= 1.0e-9 and c2 > 1.0e-3:
-        warnings.append("MSA not converged: C2 is smoothed mismatch while C2_raw is tiny")
+        warnings.append("C2 is smoothed mismatch; check C2_rel and dx_end for convergence")
 
     warnings = sorted(set(warnings))
     severe = sorted(set(severe))
@@ -568,15 +596,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         for s in stations:
             for t in times:
                 base_price = max(1.0e-6, float(electricity_price[s][t]))
-                cap_abs = config.get("shadow_price_cap_abs")
-                cap_mult_value = cap_mult * base_price
-                cap_abs_value = float(cap_abs) if cap_abs is not None else None
-                if cap_abs_value is not None:
-                    cap = min(cap_abs_value, cap_mult_value)
-                    cap_mode = "min(abs,mult)"
-                else:
-                    cap = cap_mult_value
-                    cap_mode = "mult"
+                cap, cap_mult_value, cap_abs_value, cap_mode = _compute_cap_values(base_price, config)
                 mu_kw = shadow_prices[s][t]
                 if diagnostics.get("shared_power_solver_used") == "highs":
                     raw = shadow_scale * float(mu_kw or 0.0) / max(1e-9, delta_t)
@@ -586,7 +606,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     raw_surcharge_uncapped[s][t] = None
                     heuristic_surcharge[s][t] = max(0.0, (float(p_ev_req[s][t]) + float(p_vt_req_grid[s][t])) / max(1e-6, float(station_params[s]["P_site"][t])) - 1.0) * cap
                     raw_surcharge[s][t] = min(heuristic_surcharge[s][t], cap)
-                cap_binding_map[s][t] = raw_surcharge[s][t] >= cap - 1.0e-9
+                cap_binding_map[s][t] = (raw_surcharge_uncapped[s][t] is not None and float(raw_surcharge_uncapped[s][t]) > cap - 1.0e-9) or (raw_surcharge_uncapped[s][t] is None and raw_surcharge[s][t] >= cap - 1.0e-9)
 
                 req_e_vt = float(e_vt_req.get(s, {}).get(t, 0.0))
                 shed_vt_kwh = float((shed_vt or {}).get(s, {}).get(t, 0.0))
@@ -659,6 +679,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 uncapped_entry = _clean_number(raw_surcharge_uncapped[s][t]) if (raw_surcharge_uncapped[s][t] is not None and solver_used == "highs") else None
                 ratio_req_exogenous = (p_ev_req_kw + p_vt_req_grid_kw) / p_site_den
                 ratio_req_energy = (p_ev_req_kw + p_vt_req_energy_kw) / p_site_den
+                base_price = max(1.0e-6, float(electricity_price[s][t]))
+                cap, cap_mult_value, cap_abs_value, cap_mode = _compute_cap_values(base_price, config)
                 diagnostics["power_tightness"].setdefault(s, {})[t] = {
                     "P_site_raw": p_site_raw,
                     "P_site_den": p_site_den,
@@ -676,7 +698,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     "raw_surcharge": _clean_number(raw_surcharge[s][t]),
                     "heuristic_surcharge": _clean_number(heuristic_surcharge[s][t]) if solver_used != "highs" else None,
                     "surcharge_smoothed": _clean_number(energy_surcharge[s][t]),
-                    "cap": cap_mult * base_price,
+                    "cap": _clean_number(cap),
                     "cap_used": cap,
                     "cap_mult_value": cap_mult_value,
                     "cap_abs_value": cap_abs_value,

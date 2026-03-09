@@ -118,6 +118,7 @@ def logit_assignment(
     vt_reliability_gamma: float = 0.0,
     ev_reliability_gamma: float = 0.0,
     vt_service_prob_skip_below: float = 0.0,
+    ev_service_prob_skip_below: float = 0.0,
 ) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
     all_groups = sorted({g for od_groups in demand.values() for g in od_groups.keys()})
     flows: Dict[str, Dict[str, Dict[int, float]]] = {
@@ -164,17 +165,24 @@ def logit_assignment(
                         if vt_service_prob_skip_below > 0.0 and service_prob < vt_service_prob_skip_below:
                             continue
                     ev_prob = 1.0
-                    if it.get("mode") != "eVTOL":
+                    if it.get("mode") != "eVTOL" and ev_service_prob is not None:
                         station_entries = it.get("stations", [])
-                        if station_entries:
-                            s0 = station_entries[0].get("station")
-                            if ev_service_prob and s0 in ev_service_prob:
-                                ev_prob = float(ev_service_prob[s0].get(t, 1.0))
-                        ev_prob = min(1.0, max(ev_service_prob_floor, ev_prob))
+                        ev_candidates = []
+                        for stop in station_entries:
+                            if stop.get("t") != t:
+                                continue
+                            station = stop.get("station")
+                            if station in ev_service_prob:
+                                ev_candidates.append(float(ev_service_prob[station].get(t, 1.0)))
+                        if ev_candidates:
+                            ev_prob = min(ev_candidates)
+                    ev_prob = min(1.0, max(ev_service_prob_floor, ev_prob))
+                    if it.get("mode") != "eVTOL" and ev_service_prob_skip_below > 0.0 and ev_prob < ev_service_prob_skip_below:
+                        continue
 
                     utility = (
                         vt_reliability_gamma * math.log(service_prob)
-                        + ev_reliability_gamma * math.log(ev_prob)
+                        + ev_reliability_gamma * math.log(max(ev_prob, ev_service_prob_floor))
                         - lambdas[group] * gen_cost
                     )
                     feasible_alts.append((it, utility))
