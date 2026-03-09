@@ -29,7 +29,14 @@ def load_yaml(path: str) -> Dict[str, Any]:
             return yaml.safe_load(handle)
     except ModuleNotFoundError:
         with open(resolved_path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
+            text = handle.read()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"PyYAML is not installed and file is not valid JSON: {resolved_path}. "
+                "Install with: pip install pyyaml"
+            ) from exc
 
 
 def require_paths(data: Dict[str, Any], paths: Iterable[str]) -> None:
