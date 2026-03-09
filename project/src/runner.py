@@ -144,7 +144,7 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     if solver_used != "highs":
         warnings.append(f"shared_power solver is {solver_used}, not highs; dual interpretation may differ")
     if requested_solver == "highs" and solver_used != "highs":
-        warnings.append("Requested HiGHS but non-HiGHS solver used")
+        severe.append("Requested HiGHS but non-HiGHS solver used")
     if bool(diagnostics.get("missing_inventory_reporting", False)):
         severe.append("missing inventory reporting")
     if diagnostics.get("lp_failure") is not None:
@@ -153,6 +153,11 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
         severe.append("LP failed and fallback path used")
     if cap_binding:
         warnings.append("price cap binding detected; report capped and uncapped surcharge in analysis")
+
+    c2 = float(results.get("residuals", {}).get("C2", 0.0))
+    c2_raw = float(results.get("residuals", {}).get("C2_raw", 0.0))
+    if c2_raw <= 1.0e-9 and c2 > 1.0e-3:
+        warnings.append("MSA not converged: C2 is smoothed mismatch while C2_raw is tiny")
 
     warnings = sorted(set(warnings))
     severe = sorted(set(severe))
@@ -382,6 +387,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         representative_od = "A-B" if "A-B" in demand_keys else (demand_keys[0] if demand_keys else "")
     diagnostics = {
         "dx_history": [],
+        "dn_history": [],
         "dprice_history": [],
         "max_surcharge_history": [],
         "price_snapshots": [],
@@ -397,6 +403,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         },
         "scipy_version": charging.SCIPY_VERSION,
         "scipy_ok": bool(charging.HAS_SCIPY),
+        "lp_ok": None,
     }
 
     dx = 0.0
@@ -519,30 +526,26 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         heuristic_surcharge = {s: {t: 0.0 for t in times} for s in stations}
 
         if surcharge_method != "shadow_lp":
-            raise ValueError("Only surcharge_method='shadow_lp' is supported in LP-only mode")
-        try:
-            (
-                B_vt_lp,
-                P_vt_lp,
-                shed_ev,
-                shed_vt,
-                shadow_prices,
-                shared_power_residuals,
-                shared_power_lp_diag,
-            ) = charging.solve_shared_power_inventory_lp(data, e_dep, ev_energy_kwh)
-            for s in stations:
-                B_vt_lp.setdefault(s, {t: 0.0 for t in times})
-                P_vt_lp.setdefault(s, {t: 0.0 for t in times})
-            lp_ok = True
-            diagnostics["shared_power_solver_used"] = charging.LAST_SHARED_POWER_SOLVER_USED
-            if diagnostics["shared_power_solver_used"] != "highs":
-                raise ValueError("LP-only mode requires highs solver")
-        except charging.LPFailed as exc:
-            diagnostics["lp_failure"] = exc.payload
-            raise
-        except Exception as exc:
-            diagnostics["lp_failure"] = {"message": str(exc)}
-            raise
+            raise ValueError("Only surcharge_method='shadow_lp' is supported")
+        (
+            B_vt_lp,
+            P_vt_lp,
+            shed_ev,
+            shed_vt,
+            shadow_prices,
+            shared_power_residuals,
+            shared_power_lp_diag,
+        ) = charging.solve_shared_power_inventory_lp(data, e_dep, ev_energy_kwh)
+        for s in stations:
+            B_vt_lp.setdefault(s, {t: 0.0 for t in times})
+            P_vt_lp.setdefault(s, {t: 0.0 for t in times})
+        diagnostics["shared_power_solver_used"] = charging.LAST_SHARED_POWER_SOLVER_USED
+        runtime_diag = data.get("diagnostics_runtime", {})
+        diagnostics["lp_ok"] = bool(runtime_diag.get("lp_ok", diagnostics["shared_power_solver_used"] == "highs"))
+        if runtime_diag.get("lp_failure") is not None:
+            diagnostics["lp_failure"] = runtime_diag.get("lp_failure")
+        lp_ok = diagnostics["shared_power_solver_used"] == "highs" and bool(diagnostics.get("lp_ok", False))
+        fallback_used = diagnostics["shared_power_solver_used"] != "highs" or not lp_ok
 
         vt_service_prob_target = {s: {t: 1.0 for t in times} for s in stations}
         shed_ratio_map = {s: {t: 0.0 for t in times} for s in stations}
@@ -553,9 +556,14 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 base_price = max(1.0e-6, float(electricity_price[s][t]))
                 cap = cap_mult * base_price
                 mu_kw = shadow_prices[s][t]
-                raw = shadow_scale * float(mu_kw or 0.0) / max(1e-6, delta_t)
-                raw_surcharge_uncapped[s][t] = raw
-                raw_surcharge[s][t] = min(raw, cap)
+                if diagnostics.get("shared_power_solver_used") == "highs":
+                    raw = shadow_scale * float(mu_kw or 0.0) / max(1e-6, delta_t)
+                    raw_surcharge_uncapped[s][t] = raw
+                    raw_surcharge[s][t] = min(raw, cap)
+                else:
+                    raw_surcharge_uncapped[s][t] = None
+                    heuristic_surcharge[s][t] = max(0.0, (float(p_ev_req[s][t]) + float(p_vt_req_grid[s][t])) / max(1e-6, float(station_params[s]["P_site"][t])) - 1.0) * cap
+                    raw_surcharge[s][t] = min(heuristic_surcharge[s][t], cap)
                 cap_binding_map[s][t] = raw_surcharge[s][t] >= cap - 1.0e-9
 
                 req_e_vt = float(e_vt_req.get(s, {}).get(t, 0.0))
@@ -662,6 +670,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         )
         max_surcharge = max(energy_surcharge[s][t] for s in stations for t in times)
         diagnostics["dx_history"].append(dx)
+        diagnostics["dn_history"].append(dn)
         diagnostics["dprice_history"].append(dprice)
         diagnostics["max_surcharge_history"].append(max_surcharge)
 
@@ -960,12 +969,16 @@ def _resolve_path(path: str, fallback: str) -> str:
 
 def main() -> None:
     import argparse
+    import datetime
+    import platform
+    import subprocess
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="simple_case.yaml", help="Path to data YAML")
     parser.add_argument("--schema", default="data_schema.yaml", help="Path to schema YAML")
     parser.add_argument("--dispatch", action="store_true", help="Run vehicle-level dispatch module")
-    parser.add_argument("--report-out", default="report.json", help="Path to report JSON output")
+    parser.add_argument("--report-out", "--report_out", dest="report_out", default="report.json", help="Path to report JSON output")
+    parser.add_argument("--full_report", action="store_true", help="Write full report payload")
     args = parser.parse_args()
 
     try:
@@ -986,54 +999,89 @@ def main() -> None:
         peak_prices_last = peak_snapshot[-1] if peak_snapshot else {}
         mode_share_last = results["diagnostics"].get("mode_share_by_group", [])
         mode_share_last = mode_share_last[-1] if mode_share_last else {}
-        output_full_json = bool(data.get("config", {}).get("output_full_json", True))
+        output_full_json = bool(data.get("config", {}).get("output_full_json", True) or args.full_report)
+
+        git_commit = None
+        try:
+            git_commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+        except Exception:
+            git_commit = None
+
+        equilibrium = {
+            "C1": residuals.get("C1", 0.0),
+            "C2": residuals.get("C2", 0.0),
+            "C2_rel": residuals.get("C2_rel", 0.0),
+            "C2_raw": residuals.get("C2_raw", 0.0),
+            "C7": residuals.get("C7", 0.0),
+            "C8": residuals.get("C8", 0.0),
+            "C9": residuals.get("C9", 0.0),
+            "C10": residuals.get("C10", 0.0),
+            "C10_raw": residuals.get("C10_raw", 0.0),
+            "C11": residuals.get("C11", 0.0),
+        }
+
+        diagnostics_full = {**results.get("diagnostics", {})}
+        diagnostics_full.update({
+            "iter_count": results["convergence"].get("iterations"),
+            "dx_end": results["convergence"].get("dx"),
+            "dn_end": results["convergence"].get("dn"),
+            "dprice_start": dprice_hist[0] if dprice_hist else None,
+            "dprice_end": dprice_hist[-1] if dprice_hist else None,
+            "max_surcharge": max_surcharge,
+            "peak_t": peak_prices_last.get("t"),
+            "peak_prices": peak_prices_last.get("stations", {}),
+            "objective_by_station_time": results.get("diagnostics", {}).get("shared_power_lp", {}).get("objective_components", {}),
+            "objective_totals": results.get("diagnostics", {}).get("shared_power_lp", {}).get("objective_totals", {}),
+            "dual_trace": results.get("diagnostics", {}).get("shared_power_lp", {}).get("dual_trace", {}),
+        })
+
         report = {
-            "equilibrium": {
-                "C1": residuals["C1"],
-                "C2": residuals["C2"],
-                "C2_rel": residuals.get("C2_rel", 0.0),
-                "C2_raw": residuals.get("C2_raw", 0.0),
-                "C10": residuals["C10"],
-                "C10_raw": residuals.get("C10_raw", 0.0),
-                "C11": residuals["C11"],
+            "meta": {
+                "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+                "git_commit_if_available": git_commit,
+                "python_version": sys.version,
+                "platform": platform.platform(),
+                "module_paths": diagnostics_full.get("module_paths", {}),
             },
-            "Surcharge": results["surcharge_power"],
-            "SurchargeUncapped": results.get("surcharge_power_uncapped", {}),
-            "Diagnostics": (
-                {**results.get("diagnostics", {})}
-                if output_full_json
-                else {
-                    "stop_reason": results["diagnostics"].get("stop_reason"),
-                    "iter_count": results["convergence"].get("iterations"),
-                    "dx_end": results["convergence"].get("dx"),
-                    "dn_end": results["convergence"].get("dn"),
-                    "dprice_start": dprice_hist[0] if dprice_hist else None,
-                    "dprice_end": dprice_hist[-1] if dprice_hist else None,
-                    "max_surcharge": max_surcharge,
-                    "peak_t": peak_prices_last.get("t"),
-                    "peak_prices": peak_prices_last.get("stations", {}),
-                    "mode_share_by_group_last": mode_share_last,
-                    "power_tightness": results["diagnostics"].get("power_tightness", {}),
-                }
-            ),
+            "config_used": data.get("config", {}),
+            "equilibrium": equilibrium,
+            "surcharge_power": results["surcharge_power"],
+            "surcharge_power_uncapped": results.get("surcharge_power_uncapped", {}),
+            "diagnostics": diagnostics_full if output_full_json else {
+                "stop_reason": diagnostics_full.get("stop_reason"),
+                "iter_count": diagnostics_full.get("iter_count"),
+                "dx_end": diagnostics_full.get("dx_end"),
+                "dn_end": diagnostics_full.get("dn_end"),
+                "dprice_end": diagnostics_full.get("dprice_end"),
+                "max_surcharge": diagnostics_full.get("max_surcharge"),
+                "peak_t": diagnostics_full.get("peak_t"),
+                "peak_prices": diagnostics_full.get("peak_prices"),
+            },
             "SelfAudit": results.get("SelfAudit", {}),
         }
-        report["Diagnostics"].setdefault("cbd_tau", cbd_tau_one)
-        report["Diagnostics"]["shared_power_solver_used"] = results["diagnostics"].get("shared_power_solver_used")
-        report["Diagnostics"]["delta_t"] = data.get("meta", {}).get("delta_t")
-        report["Diagnostics"]["surcharge_kappa"] = data.get("config", {}).get("shadow_price_scale")
-        report["Diagnostics"]["surcharge_cap_mult"] = data.get("config", {}).get("shadow_price_cap_mult")
-        report["Diagnostics"]["VOLL_EV"] = data.get("config", {}).get("voll_ev_per_kwh")
-        report["Diagnostics"]["VOLL_VT"] = data.get("config", {}).get("voll_vt_per_kwh")
-        report["Diagnostics"]["vt_reliability_gamma"] = data.get("config", {}).get("vt_reliability_gamma")
+        report["diagnostics"].setdefault("cbd_tau", cbd_tau_one)
+        report["diagnostics"]["shared_power_solver_used"] = results["diagnostics"].get("shared_power_solver_used")
+        report["diagnostics"]["delta_t"] = data.get("meta", {}).get("delta_t")
+        report["diagnostics"]["surcharge_kappa"] = data.get("config", {}).get("shadow_price_scale")
+        report["diagnostics"]["surcharge_cap_mult"] = data.get("config", {}).get("shadow_price_cap_mult")
+        report["diagnostics"]["VOLL_EV"] = data.get("config", {}).get("voll_ev_per_kwh")
+        report["diagnostics"]["VOLL_VT"] = data.get("config", {}).get("voll_vt_per_kwh")
+        report["diagnostics"]["vt_reliability_gamma"] = data.get("config", {}).get("vt_reliability_gamma")
         report = _clean_nested_numbers(report)
 
     except Exception as exc:
         report = {
+            "meta": {
+                "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+                "git_commit_if_available": None,
+                "python_version": sys.version,
+                "platform": platform.platform(),
+            },
+            "config_used": {},
             "equilibrium": {},
-            "Surcharge": {},
-            "SurchargeUncapped": {},
-            "Diagnostics": {
+            "surcharge_power": {},
+            "surcharge_power_uncapped": {},
+            "diagnostics": {
                 "module_paths": {
                     "runner_file": str(Path(__file__).resolve()),
                     "charging_file": str(Path(charging.__file__).resolve()),
@@ -1042,7 +1090,7 @@ def main() -> None:
                 "scipy_version": charging.SCIPY_VERSION,
                 "scipy_ok": bool(charging.HAS_SCIPY),
             },
-            "SelfAudit": {"ok": False, "warnings": [], "severe": [repr(exc)]},
+            "SelfAudit": {"ok": False, "warnings": [], "severe": [repr(exc)], "cap_binding": False, "has_negative_n": False},
         }
         payload = json.dumps(_clean_nested_numbers(report), ensure_ascii=False, indent=2)
         with open(args.report_out, "w", encoding="utf-8") as handle:
@@ -1053,6 +1101,11 @@ def main() -> None:
     payload = json.dumps(report, ensure_ascii=False, indent=2)
     with open(args.report_out, "w", encoding="utf-8") as handle:
         handle.write(payload)
+    print(
+        f"SUMMARY iter_count={report['diagnostics'].get('iter_count')} "
+        f"max_surcharge={report['diagnostics'].get('max_surcharge')} "
+        f"peak_t={report['diagnostics'].get('peak_t')} solver={report['diagnostics'].get('shared_power_solver_used')}"
+    )
     print(f"Wrote {args.report_out} (bytes={len(payload.encode('utf-8'))})")
     print(payload)
 
