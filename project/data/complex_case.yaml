@@ -1,0 +1,500 @@
+{
+  "meta": {
+    "T": 6,
+    "delta_t": 1.0
+  },
+  "config": {
+    "max_iter": 120,
+    "min_iters": 10,
+    "patience": 3,
+    "surcharge_msa_alpha": 0.05,
+    "surcharge_kappa": 0.5,
+    "representative_od": "D-B",
+    "tol": 0.1,
+    "eps_improve": 1.0e-6,
+    "use_generator": false,
+    "K_paths": 3
+  },
+  "sets": {
+    "time": [1, 2, 3, 4, 5, 6],
+    "groups": ["low", "mid", "high"],
+    "vot_groups": ["low", "mid", "high"],
+    "od_pairs": [["A", "B"], ["A", "C"], ["A", "D"], ["D", "B"], ["D", "C"]],
+    "ods": ["A-B", "A-C", "A-D", "D-B", "D-C"],
+    "arcs": [
+      "a_in1",
+      "a_in2",
+      "a_g1",
+      "a_g2",
+      "a_g3",
+      "a_g4",
+      "a_g5",
+      "a_g6",
+      "a_g7",
+      "a_cbd1",
+      "a_cbd2",
+      "a_cbd3",
+      "a_out1",
+      "a_out2"
+    ],
+    "stations": ["s1", "s2", "s3"],
+    "vehicles": ["m1", "m2", "m3"]
+  },
+  "parameters": {
+    "q": {
+      "A-B": {
+        "low": {"1": 8, "2": 8, "3": 12, "4": 12, "5": 10, "6": 8},
+        "mid": {"1": 6, "2": 6, "3": 10, "4": 10, "5": 8, "6": 6},
+        "high": {"1": 4, "2": 4, "3": 8, "4": 8, "5": 6, "6": 4}
+      },
+      "A-C": {
+        "low": {"1": 7, "2": 7, "3": 10, "4": 10, "5": 9, "6": 7},
+        "mid": {"1": 5, "2": 5, "3": 9, "4": 9, "5": 7, "6": 5},
+        "high": {"1": 3, "2": 3, "3": 6, "4": 6, "5": 5, "6": 3}
+      },
+      "A-D": {
+        "low": {"1": 6, "2": 6, "3": 9, "4": 9, "5": 8, "6": 6},
+        "mid": {"1": 4, "2": 4, "3": 7, "4": 7, "5": 6, "6": 4},
+        "high": {"1": 3, "2": 3, "3": 5, "4": 5, "5": 4, "6": 3}
+      },
+      "D-B": {
+        "low": {"1": 9, "2": 9, "3": 13, "4": 13, "5": 11, "6": 9},
+        "mid": {"1": 6, "2": 6, "3": 10, "4": 10, "5": 8, "6": 6},
+        "high": {"1": 4, "2": 4, "3": 7, "4": 7, "5": 6, "6": 4}
+      },
+      "D-C": {
+        "low": {"1": 7, "2": 7, "3": 11, "4": 11, "5": 9, "6": 7},
+        "mid": {"1": 5, "2": 5, "3": 9, "4": 9, "5": 7, "6": 5},
+        "high": {"1": 3, "2": 3, "3": 6, "4": 6, "5": 4, "6": 3}
+      }
+    },
+    "VOT": {
+      "low": {"1": 10, "2": 10, "3": 10, "4": 10, "5": 10, "6": 10},
+      "mid": {"1": 20, "2": 20, "3": 20, "4": 20, "5": 20, "6": 20},
+      "high": {"1": 40, "2": 40, "3": 40, "4": 40, "5": 40, "6": 40}
+    },
+    "lambda": {
+      "low": 0.2,
+      "mid": 0.3,
+      "high": 0.4
+    },
+    "arcs": {
+      "a_in1": {"tau0": 2.0, "cap": 30.0, "alpha": 0.15, "beta": 4.0, "type": "G"},
+      "a_in2": {"tau0": 2.5, "cap": 28.0, "alpha": 0.15, "beta": 4.0, "type": "G"},
+      "a_g1": {"tau0": 4.0, "cap": 35.0, "alpha": 0.15, "beta": 4.0, "type": "G"},
+      "a_g2": {"tau0": 3.5, "cap": 32.0, "alpha": 0.15, "beta": 4.0, "type": "G"},
+      "a_g3": {"tau0": 4.5, "cap": 30.0, "alpha": 0.15, "beta": 4.0, "type": "G"},
+      "a_g4": {"tau0": 5.0, "cap": 30.0, "alpha": 0.15, "beta": 4.0, "type": "G"},
+      "a_g5": {"tau0": 3.0, "cap": 33.0, "alpha": 0.15, "beta": 4.0, "type": "G"},
+      "a_g6": {"tau0": 3.5, "cap": 33.0, "alpha": 0.15, "beta": 4.0, "type": "G"},
+      "a_g7": {"tau0": 4.0, "cap": 32.0, "alpha": 0.15, "beta": 4.0, "type": "G"},
+      "a_cbd1": {"tau0": 2.5, "cap": 20.0, "alpha": 0.15, "beta": 4.0, "type": "CBD", "theta": 1.4},
+      "a_cbd2": {"tau0": 2.0, "cap": 18.0, "alpha": 0.15, "beta": 4.0, "type": "CBD", "theta": 1.6},
+      "a_cbd3": {"tau0": 3.0, "cap": 18.0, "alpha": 0.15, "beta": 4.0, "type": "CBD", "theta": 1.5},
+      "a_out1": {"tau0": 2.0, "cap": 30.0, "alpha": 0.15, "beta": 4.0, "type": "G"},
+      "a_out2": {"tau0": 2.5, "cap": 28.0, "alpha": 0.15, "beta": 4.0, "type": "G"}
+    },
+    "boundary_in": ["a_in1", "a_in2"],
+    "boundary_out": ["a_out1", "a_out2"],
+    "n0": 40.0,
+    "mfd": {
+      "gamma": 0.4,
+      "n_crit": 80.0,
+      "g_max": 2.0
+    },
+    "stations": {
+      "s1": {
+        "cap_stall": 3,
+        "w0": 0.6,
+        "P_site": {"1": 40, "2": 40, "3": 40, "4": 40, "5": 40, "6": 40}
+      },
+      "s2": {
+        "cap_stall": 2,
+        "w0": 0.8,
+        "P_site": {"1": 30, "2": 30, "3": 30, "4": 30, "5": 30, "6": 30}
+      },
+      "s3": {
+        "cap_stall": 6,
+        "w0": 0.2,
+        "P_site": {"1": 60, "2": 60, "3": 60, "4": 60, "5": 60, "6": 60}
+      }
+    },
+    "electricity_price": {
+      "s1": {"1": 0.15, "2": 0.15, "3": 0.30, "4": 0.30, "5": 0.45, "6": 0.45},
+      "s2": {"1": 0.15, "2": 0.15, "3": 0.30, "4": 0.30, "5": 0.45, "6": 0.45},
+      "s3": {"1": 0.15, "2": 0.15, "3": 0.30, "4": 0.30, "5": 0.45, "6": 0.45}
+    },
+    "charging": {
+      "m1": {"E_min": 5.0, "E_max": 30.0, "E_init": 12.0, "E_res": 6.0, "eta_ch": 0.9, "P_max": 15.0},
+      "m2": {"E_min": 5.0, "E_max": 30.0, "E_init": 14.0, "E_res": 6.0, "eta_ch": 0.9, "P_max": 15.0},
+      "m3": {"E_min": 5.0, "E_max": 30.0, "E_init": 10.0, "E_res": 6.0, "eta_ch": 0.9, "P_max": 15.0}
+    },
+    "avail": {
+      "m1": {
+        "s1": {"1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1},
+        "s2": {"1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1},
+        "s3": {"1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1}
+      },
+      "m2": {
+        "s1": {"1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1},
+        "s2": {"1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1},
+        "s3": {"1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1}
+      },
+      "m3": {
+        "s1": {"1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1},
+        "s2": {"1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1},
+        "s3": {"1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1}
+      }
+    },
+    "e_fly_or_drive": {
+      "m1": {"1": 6.0, "2": 6.0, "3": 7.0, "4": 7.0, "5": 6.0, "6": 5.0},
+      "m2": {"1": 5.0, "2": 6.0, "3": 7.0, "4": 7.0, "5": 6.0, "6": 5.0},
+      "m3": {"1": 5.0, "2": 5.0, "3": 6.0, "4": 6.0, "5": 6.0, "6": 5.0}
+    },
+    "vertiport_storage": {
+      "s1": {"B_init": 20.0, "B_min": 5.0, "B_max": 60.0, "eta_ch": 0.9},
+      "s2": {"B_init": 15.0, "B_min": 5.0, "B_max": 50.0, "eta_ch": 0.9}
+    },
+    "vertiport_cap_pax": {
+      "s1": {"1": 12, "2": 12, "3": 15, "4": 15, "5": 10, "6": 10},
+      "s2": {"1": 10, "2": 10, "3": 12, "4": 12, "5": 8, "6": 8}
+    },
+    "planning": {
+      "delta_p_site": [0, 10, 20],
+      "delta_stall": [0, 1, 2],
+      "delta_cap_pax": [0, 5, 10],
+      "price_factor": [0.9, 1.0, 1.1],
+      "max_plans": 30,
+      "cP": 1.5,
+      "cS": 8.0,
+      "cV": 3.0,
+      "budget": null,
+      "shed_penalty": 1.0e5
+    }
+  },
+  "itineraries": [
+    {
+      "id": "ab_ev_s1",
+      "od": ["A", "B"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in1", "t": 1, "frac": 1.0}, {"arc": "a_g1", "t": 1, "frac": 1.0}, {"arc": "a_cbd1", "t": 1, "frac": 1.0}, {"arc": "a_out1", "t": 1, "frac": 1.0},
+        {"arc": "a_in1", "t": 2, "frac": 1.0}, {"arc": "a_g1", "t": 2, "frac": 1.0}, {"arc": "a_cbd1", "t": 2, "frac": 1.0}, {"arc": "a_out1", "t": 2, "frac": 1.0},
+        {"arc": "a_in1", "t": 3, "frac": 1.0}, {"arc": "a_g1", "t": 3, "frac": 1.0}, {"arc": "a_cbd1", "t": 3, "frac": 1.0}, {"arc": "a_out1", "t": 3, "frac": 1.0},
+        {"arc": "a_in1", "t": 4, "frac": 1.0}, {"arc": "a_g1", "t": 4, "frac": 1.0}, {"arc": "a_cbd1", "t": 4, "frac": 1.0}, {"arc": "a_out1", "t": 4, "frac": 1.0},
+        {"arc": "a_in1", "t": 5, "frac": 1.0}, {"arc": "a_g1", "t": 5, "frac": 1.0}, {"arc": "a_cbd1", "t": 5, "frac": 1.0}, {"arc": "a_out1", "t": 5, "frac": 1.0},
+        {"arc": "a_in1", "t": 6, "frac": 1.0}, {"arc": "a_g1", "t": 6, "frac": 1.0}, {"arc": "a_cbd1", "t": 6, "frac": 1.0}, {"arc": "a_out1", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s1", "t": 3, "energy": 8.0},
+        {"station": "s1", "t": 4, "energy": 8.0}
+      ],
+      "money": 1.5,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "ab_ev_s2",
+      "od": ["A", "B"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in2", "t": 1, "frac": 1.0}, {"arc": "a_g2", "t": 1, "frac": 1.0}, {"arc": "a_cbd2", "t": 1, "frac": 1.0}, {"arc": "a_out2", "t": 1, "frac": 1.0},
+        {"arc": "a_in2", "t": 2, "frac": 1.0}, {"arc": "a_g2", "t": 2, "frac": 1.0}, {"arc": "a_cbd2", "t": 2, "frac": 1.0}, {"arc": "a_out2", "t": 2, "frac": 1.0},
+        {"arc": "a_in2", "t": 3, "frac": 1.0}, {"arc": "a_g2", "t": 3, "frac": 1.0}, {"arc": "a_cbd2", "t": 3, "frac": 1.0}, {"arc": "a_out2", "t": 3, "frac": 1.0},
+        {"arc": "a_in2", "t": 4, "frac": 1.0}, {"arc": "a_g2", "t": 4, "frac": 1.0}, {"arc": "a_cbd2", "t": 4, "frac": 1.0}, {"arc": "a_out2", "t": 4, "frac": 1.0},
+        {"arc": "a_in2", "t": 5, "frac": 1.0}, {"arc": "a_g2", "t": 5, "frac": 1.0}, {"arc": "a_cbd2", "t": 5, "frac": 1.0}, {"arc": "a_out2", "t": 5, "frac": 1.0},
+        {"arc": "a_in2", "t": 6, "frac": 1.0}, {"arc": "a_g2", "t": 6, "frac": 1.0}, {"arc": "a_cbd2", "t": 6, "frac": 1.0}, {"arc": "a_out2", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s2", "t": 3, "energy": 6.0},
+        {"station": "s2", "t": 5, "energy": 6.0}
+      ],
+      "money": 1.0,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "ab_ev_s3",
+      "od": ["A", "B"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in1", "t": 1, "frac": 1.0}, {"arc": "a_g3", "t": 1, "frac": 1.0}, {"arc": "a_cbd3", "t": 1, "frac": 1.0}, {"arc": "a_out1", "t": 1, "frac": 1.0},
+        {"arc": "a_in1", "t": 2, "frac": 1.0}, {"arc": "a_g3", "t": 2, "frac": 1.0}, {"arc": "a_cbd3", "t": 2, "frac": 1.0}, {"arc": "a_out1", "t": 2, "frac": 1.0},
+        {"arc": "a_in1", "t": 3, "frac": 1.0}, {"arc": "a_g3", "t": 3, "frac": 1.0}, {"arc": "a_cbd3", "t": 3, "frac": 1.0}, {"arc": "a_out1", "t": 3, "frac": 1.0},
+        {"arc": "a_in1", "t": 4, "frac": 1.0}, {"arc": "a_g3", "t": 4, "frac": 1.0}, {"arc": "a_cbd3", "t": 4, "frac": 1.0}, {"arc": "a_out1", "t": 4, "frac": 1.0},
+        {"arc": "a_in1", "t": 5, "frac": 1.0}, {"arc": "a_g3", "t": 5, "frac": 1.0}, {"arc": "a_cbd3", "t": 5, "frac": 1.0}, {"arc": "a_out1", "t": 5, "frac": 1.0},
+        {"arc": "a_in1", "t": 6, "frac": 1.0}, {"arc": "a_g3", "t": 6, "frac": 1.0}, {"arc": "a_cbd3", "t": 6, "frac": 1.0}, {"arc": "a_out1", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s3", "t": 2, "energy": 5.0},
+        {"station": "s3", "t": 5, "energy": 5.0}
+      ],
+      "money": 0.5,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "ab_vt_s1",
+      "od": ["A", "B"],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "money": 6.0,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.6, "4": 0.6, "5": 0.6, "6": 0.0},
+      "dep_station": "s1",
+      "e_per_pax": 1.5,
+      "phi_energy_markup": 1.0
+    },
+    {
+      "id": "ab_vt_s2",
+      "od": ["A", "B"],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "money": 5.5,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.7, "4": 0.7, "5": 0.7, "6": 0.0},
+      "dep_station": "s2",
+      "e_per_pax": 1.3,
+      "phi_energy_markup": 1.0
+    },
+    {
+      "id": "ac_ev_s1",
+      "od": ["A", "C"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in2", "t": 1, "frac": 1.0}, {"arc": "a_g4", "t": 1, "frac": 1.0}, {"arc": "a_cbd1", "t": 1, "frac": 1.0}, {"arc": "a_out2", "t": 1, "frac": 1.0},
+        {"arc": "a_in2", "t": 2, "frac": 1.0}, {"arc": "a_g4", "t": 2, "frac": 1.0}, {"arc": "a_cbd1", "t": 2, "frac": 1.0}, {"arc": "a_out2", "t": 2, "frac": 1.0},
+        {"arc": "a_in2", "t": 3, "frac": 1.0}, {"arc": "a_g4", "t": 3, "frac": 1.0}, {"arc": "a_cbd1", "t": 3, "frac": 1.0}, {"arc": "a_out2", "t": 3, "frac": 1.0},
+        {"arc": "a_in2", "t": 4, "frac": 1.0}, {"arc": "a_g4", "t": 4, "frac": 1.0}, {"arc": "a_cbd1", "t": 4, "frac": 1.0}, {"arc": "a_out2", "t": 4, "frac": 1.0},
+        {"arc": "a_in2", "t": 5, "frac": 1.0}, {"arc": "a_g4", "t": 5, "frac": 1.0}, {"arc": "a_cbd1", "t": 5, "frac": 1.0}, {"arc": "a_out2", "t": 5, "frac": 1.0},
+        {"arc": "a_in2", "t": 6, "frac": 1.0}, {"arc": "a_g4", "t": 6, "frac": 1.0}, {"arc": "a_cbd1", "t": 6, "frac": 1.0}, {"arc": "a_out2", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s1", "t": 3, "energy": 7.0},
+        {"station": "s1", "t": 4, "energy": 7.0}
+      ],
+      "money": 1.4,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "ac_ev_s2",
+      "od": ["A", "C"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in1", "t": 1, "frac": 1.0}, {"arc": "a_g5", "t": 1, "frac": 1.0}, {"arc": "a_cbd2", "t": 1, "frac": 1.0}, {"arc": "a_out1", "t": 1, "frac": 1.0},
+        {"arc": "a_in1", "t": 2, "frac": 1.0}, {"arc": "a_g5", "t": 2, "frac": 1.0}, {"arc": "a_cbd2", "t": 2, "frac": 1.0}, {"arc": "a_out1", "t": 2, "frac": 1.0},
+        {"arc": "a_in1", "t": 3, "frac": 1.0}, {"arc": "a_g5", "t": 3, "frac": 1.0}, {"arc": "a_cbd2", "t": 3, "frac": 1.0}, {"arc": "a_out1", "t": 3, "frac": 1.0},
+        {"arc": "a_in1", "t": 4, "frac": 1.0}, {"arc": "a_g5", "t": 4, "frac": 1.0}, {"arc": "a_cbd2", "t": 4, "frac": 1.0}, {"arc": "a_out1", "t": 4, "frac": 1.0},
+        {"arc": "a_in1", "t": 5, "frac": 1.0}, {"arc": "a_g5", "t": 5, "frac": 1.0}, {"arc": "a_cbd2", "t": 5, "frac": 1.0}, {"arc": "a_out1", "t": 5, "frac": 1.0},
+        {"arc": "a_in1", "t": 6, "frac": 1.0}, {"arc": "a_g5", "t": 6, "frac": 1.0}, {"arc": "a_cbd2", "t": 6, "frac": 1.0}, {"arc": "a_out1", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s2", "t": 3, "energy": 6.0},
+        {"station": "s2", "t": 5, "energy": 6.0}
+      ],
+      "money": 1.0,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "ac_vt_s1",
+      "od": ["A", "C"],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "money": 6.5,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.7, "4": 0.7, "5": 0.7, "6": 0.0},
+      "dep_station": "s1",
+      "e_per_pax": 1.6,
+      "phi_energy_markup": 1.0
+    },
+    {
+      "id": "ac_vt_s2",
+      "od": ["A", "C"],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "money": 6.0,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.8, "4": 0.8, "5": 0.8, "6": 0.0},
+      "dep_station": "s2",
+      "e_per_pax": 1.4,
+      "phi_energy_markup": 1.0
+    },
+    {
+      "id": "db_ev_s1",
+      "od": ["D", "B"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in1", "t": 1, "frac": 1.0}, {"arc": "a_g6", "t": 1, "frac": 1.0}, {"arc": "a_cbd3", "t": 1, "frac": 1.0}, {"arc": "a_out2", "t": 1, "frac": 1.0},
+        {"arc": "a_in1", "t": 2, "frac": 1.0}, {"arc": "a_g6", "t": 2, "frac": 1.0}, {"arc": "a_cbd3", "t": 2, "frac": 1.0}, {"arc": "a_out2", "t": 2, "frac": 1.0},
+        {"arc": "a_in1", "t": 3, "frac": 1.0}, {"arc": "a_g6", "t": 3, "frac": 1.0}, {"arc": "a_cbd3", "t": 3, "frac": 1.0}, {"arc": "a_out2", "t": 3, "frac": 1.0},
+        {"arc": "a_in1", "t": 4, "frac": 1.0}, {"arc": "a_g6", "t": 4, "frac": 1.0}, {"arc": "a_cbd3", "t": 4, "frac": 1.0}, {"arc": "a_out2", "t": 4, "frac": 1.0},
+        {"arc": "a_in1", "t": 5, "frac": 1.0}, {"arc": "a_g6", "t": 5, "frac": 1.0}, {"arc": "a_cbd3", "t": 5, "frac": 1.0}, {"arc": "a_out2", "t": 5, "frac": 1.0},
+        {"arc": "a_in1", "t": 6, "frac": 1.0}, {"arc": "a_g6", "t": 6, "frac": 1.0}, {"arc": "a_cbd3", "t": 6, "frac": 1.0}, {"arc": "a_out2", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s1", "t": 3, "energy": 7.0}
+      ],
+      "money": 1.3,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "db_ev_s3",
+      "od": ["D", "B"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in2", "t": 1, "frac": 1.0}, {"arc": "a_g7", "t": 1, "frac": 1.0}, {"arc": "a_cbd1", "t": 1, "frac": 1.0}, {"arc": "a_out1", "t": 1, "frac": 1.0},
+        {"arc": "a_in2", "t": 2, "frac": 1.0}, {"arc": "a_g7", "t": 2, "frac": 1.0}, {"arc": "a_cbd1", "t": 2, "frac": 1.0}, {"arc": "a_out1", "t": 2, "frac": 1.0},
+        {"arc": "a_in2", "t": 3, "frac": 1.0}, {"arc": "a_g7", "t": 3, "frac": 1.0}, {"arc": "a_cbd1", "t": 3, "frac": 1.0}, {"arc": "a_out1", "t": 3, "frac": 1.0},
+        {"arc": "a_in2", "t": 4, "frac": 1.0}, {"arc": "a_g7", "t": 4, "frac": 1.0}, {"arc": "a_cbd1", "t": 4, "frac": 1.0}, {"arc": "a_out1", "t": 4, "frac": 1.0},
+        {"arc": "a_in2", "t": 5, "frac": 1.0}, {"arc": "a_g7", "t": 5, "frac": 1.0}, {"arc": "a_cbd1", "t": 5, "frac": 1.0}, {"arc": "a_out1", "t": 5, "frac": 1.0},
+        {"arc": "a_in2", "t": 6, "frac": 1.0}, {"arc": "a_g7", "t": 6, "frac": 1.0}, {"arc": "a_cbd1", "t": 6, "frac": 1.0}, {"arc": "a_out1", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s3", "t": 4, "energy": 6.0}
+      ],
+      "money": 0.8,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "db_vt_s1",
+      "od": ["D", "B"],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "money": 3.5,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.6, "4": 0.6, "5": 0.6, "6": 0.0},
+      "dep_station": "s1",
+      "e_per_pax": 1.4,
+      "phi_energy_markup": 1.0
+    },
+    {
+      "id": "db_vt_s2",
+      "od": ["D", "B"],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "money": 3.0,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.7, "4": 0.7, "5": 0.7, "6": 0.0},
+      "dep_station": "s2",
+      "e_per_pax": 1.2,
+      "phi_energy_markup": 1.0
+    },
+    {
+      "id": "dc_ev_s1",
+      "od": ["D", "C"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in2", "t": 1, "frac": 1.0}, {"arc": "a_g4", "t": 1, "frac": 1.0}, {"arc": "a_cbd2", "t": 1, "frac": 1.0}, {"arc": "a_out2", "t": 1, "frac": 1.0},
+        {"arc": "a_in2", "t": 2, "frac": 1.0}, {"arc": "a_g4", "t": 2, "frac": 1.0}, {"arc": "a_cbd2", "t": 2, "frac": 1.0}, {"arc": "a_out2", "t": 2, "frac": 1.0},
+        {"arc": "a_in2", "t": 3, "frac": 1.0}, {"arc": "a_g4", "t": 3, "frac": 1.0}, {"arc": "a_cbd2", "t": 3, "frac": 1.0}, {"arc": "a_out2", "t": 3, "frac": 1.0},
+        {"arc": "a_in2", "t": 4, "frac": 1.0}, {"arc": "a_g4", "t": 4, "frac": 1.0}, {"arc": "a_cbd2", "t": 4, "frac": 1.0}, {"arc": "a_out2", "t": 4, "frac": 1.0},
+        {"arc": "a_in2", "t": 5, "frac": 1.0}, {"arc": "a_g4", "t": 5, "frac": 1.0}, {"arc": "a_cbd2", "t": 5, "frac": 1.0}, {"arc": "a_out2", "t": 5, "frac": 1.0},
+        {"arc": "a_in2", "t": 6, "frac": 1.0}, {"arc": "a_g4", "t": 6, "frac": 1.0}, {"arc": "a_cbd2", "t": 6, "frac": 1.0}, {"arc": "a_out2", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s1", "t": 4, "energy": 7.0}
+      ],
+      "money": 1.2,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "dc_ev_s3",
+      "od": ["D", "C"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in1", "t": 1, "frac": 1.0}, {"arc": "a_g5", "t": 1, "frac": 1.0}, {"arc": "a_cbd1", "t": 1, "frac": 1.0}, {"arc": "a_out1", "t": 1, "frac": 1.0},
+        {"arc": "a_in1", "t": 2, "frac": 1.0}, {"arc": "a_g5", "t": 2, "frac": 1.0}, {"arc": "a_cbd1", "t": 2, "frac": 1.0}, {"arc": "a_out1", "t": 2, "frac": 1.0},
+        {"arc": "a_in1", "t": 3, "frac": 1.0}, {"arc": "a_g5", "t": 3, "frac": 1.0}, {"arc": "a_cbd1", "t": 3, "frac": 1.0}, {"arc": "a_out1", "t": 3, "frac": 1.0},
+        {"arc": "a_in1", "t": 4, "frac": 1.0}, {"arc": "a_g5", "t": 4, "frac": 1.0}, {"arc": "a_cbd1", "t": 4, "frac": 1.0}, {"arc": "a_out1", "t": 4, "frac": 1.0},
+        {"arc": "a_in1", "t": 5, "frac": 1.0}, {"arc": "a_g5", "t": 5, "frac": 1.0}, {"arc": "a_cbd1", "t": 5, "frac": 1.0}, {"arc": "a_out1", "t": 5, "frac": 1.0},
+        {"arc": "a_in1", "t": 6, "frac": 1.0}, {"arc": "a_g5", "t": 6, "frac": 1.0}, {"arc": "a_cbd1", "t": 6, "frac": 1.0}, {"arc": "a_out1", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s3", "t": 5, "energy": 6.0}
+      ],
+      "money": 0.9,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "dc_vt_s1",
+      "od": ["D", "C"],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "money": 6.0,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.6, "4": 0.6, "5": 0.6, "6": 0.0},
+      "dep_station": "s1",
+      "e_per_pax": 1.5,
+      "phi_energy_markup": 1.0
+    },
+    {
+      "id": "dc_vt_s2",
+      "od": ["D", "C"],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "money": 5.6,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.7, "4": 0.7, "5": 0.7, "6": 0.0},
+      "dep_station": "s2",
+      "e_per_pax": 1.3,
+      "phi_energy_markup": 1.0
+    },
+    {
+      "id": "ad_ev_s1",
+      "od": ["A", "D"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in2", "t": 1, "frac": 1.0}, {"arc": "a_g7", "t": 1, "frac": 1.0}, {"arc": "a_cbd2", "t": 1, "frac": 1.0}, {"arc": "a_out2", "t": 1, "frac": 1.0},
+        {"arc": "a_in2", "t": 2, "frac": 1.0}, {"arc": "a_g7", "t": 2, "frac": 1.0}, {"arc": "a_cbd2", "t": 2, "frac": 1.0}, {"arc": "a_out2", "t": 2, "frac": 1.0},
+        {"arc": "a_in2", "t": 3, "frac": 1.0}, {"arc": "a_g7", "t": 3, "frac": 1.0}, {"arc": "a_cbd2", "t": 3, "frac": 1.0}, {"arc": "a_out2", "t": 3, "frac": 1.0},
+        {"arc": "a_in2", "t": 4, "frac": 1.0}, {"arc": "a_g7", "t": 4, "frac": 1.0}, {"arc": "a_cbd2", "t": 4, "frac": 1.0}, {"arc": "a_out2", "t": 4, "frac": 1.0},
+        {"arc": "a_in2", "t": 5, "frac": 1.0}, {"arc": "a_g7", "t": 5, "frac": 1.0}, {"arc": "a_cbd2", "t": 5, "frac": 1.0}, {"arc": "a_out2", "t": 5, "frac": 1.0},
+        {"arc": "a_in2", "t": 6, "frac": 1.0}, {"arc": "a_g7", "t": 6, "frac": 1.0}, {"arc": "a_cbd2", "t": 6, "frac": 1.0}, {"arc": "a_out2", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s1", "t": 3, "energy": 7.0}
+      ],
+      "money": 1.2,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "ad_ev_s3",
+      "od": ["A", "D"],
+      "mode": "EV",
+      "road_arcs": [
+        {"arc": "a_in1", "t": 1, "frac": 1.0}, {"arc": "a_g4", "t": 1, "frac": 1.0}, {"arc": "a_cbd3", "t": 1, "frac": 1.0}, {"arc": "a_out1", "t": 1, "frac": 1.0},
+        {"arc": "a_in1", "t": 2, "frac": 1.0}, {"arc": "a_g4", "t": 2, "frac": 1.0}, {"arc": "a_cbd3", "t": 2, "frac": 1.0}, {"arc": "a_out1", "t": 2, "frac": 1.0},
+        {"arc": "a_in1", "t": 3, "frac": 1.0}, {"arc": "a_g4", "t": 3, "frac": 1.0}, {"arc": "a_cbd3", "t": 3, "frac": 1.0}, {"arc": "a_out1", "t": 3, "frac": 1.0},
+        {"arc": "a_in1", "t": 4, "frac": 1.0}, {"arc": "a_g4", "t": 4, "frac": 1.0}, {"arc": "a_cbd3", "t": 4, "frac": 1.0}, {"arc": "a_out1", "t": 4, "frac": 1.0},
+        {"arc": "a_in1", "t": 5, "frac": 1.0}, {"arc": "a_g4", "t": 5, "frac": 1.0}, {"arc": "a_cbd3", "t": 5, "frac": 1.0}, {"arc": "a_out1", "t": 5, "frac": 1.0},
+        {"arc": "a_in1", "t": 6, "frac": 1.0}, {"arc": "a_g4", "t": 6, "frac": 1.0}, {"arc": "a_cbd3", "t": 6, "frac": 1.0}, {"arc": "a_out1", "t": 6, "frac": 1.0}
+      ],
+      "stations": [
+        {"station": "s3", "t": 4, "energy": 5.0}
+      ],
+      "money": 0.8,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
+    },
+    {
+      "id": "ad_vt_s1",
+      "od": ["A", "D"],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "money": 6.2,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.6, "4": 0.6, "5": 0.6, "6": 0.0},
+      "dep_station": "s1",
+      "e_per_pax": 1.5,
+      "phi_energy_markup": 1.0
+    },
+    {
+      "id": "ad_vt_s2",
+      "od": ["A", "D"],
+      "mode": "eVTOL",
+      "road_arcs": [],
+      "stations": [],
+      "money": 5.7,
+      "flight_time": {"1": 0.0, "2": 0.0, "3": 0.7, "4": 0.7, "5": 0.7, "6": 0.0},
+      "dep_station": "s2",
+      "e_per_pax": 1.4,
+      "phi_energy_markup": 1.0
+    }
+  ]
+}
