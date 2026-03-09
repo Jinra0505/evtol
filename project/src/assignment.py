@@ -112,8 +112,10 @@ def logit_assignment(
     lambdas: Dict[str, float],
     times: List[int],
     vt_service_prob: Dict[str, Dict[int, float]] | None = None,
+    ev_service_prob: Dict[str, Dict[int, float]] | None = None,
     vt_service_prob_floor: float = 1.0e-4,
     vt_reliability_gamma: float = 0.0,
+    ev_reliability_gamma: float = 0.0,
     vt_service_prob_skip_below: float = 0.0,
 ) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
     all_groups = sorted({g for od_groups in demand.values() for g in od_groups.keys()})
@@ -160,8 +162,20 @@ def logit_assignment(
                         service_prob = min(1.0, max(vt_service_prob_floor, service_prob))
                         if vt_service_prob_skip_below > 0.0 and service_prob < vt_service_prob_skip_below:
                             continue
+                    ev_prob = 1.0
+                    if it.get("mode") != "eVTOL":
+                        station_entries = it.get("stations", [])
+                        if station_entries:
+                            s0 = station_entries[0].get("station")
+                            if ev_service_prob and s0 in ev_service_prob:
+                                ev_prob = float(ev_service_prob[s0].get(t, 1.0))
+                        ev_prob = min(1.0, max(vt_service_prob_floor, ev_prob))
 
-                    utility = vt_reliability_gamma * math.log(service_prob) - lambdas[group] * gen_cost
+                    utility = (
+                        vt_reliability_gamma * math.log(service_prob)
+                        + ev_reliability_gamma * math.log(ev_prob)
+                        - lambdas[group] * gen_cost
+                    )
                     feasible_alts.append((it, utility))
                 total_demand = time_map.get(t, 0.0)
                 if total_demand <= 0.0:

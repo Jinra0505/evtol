@@ -352,6 +352,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     config.setdefault("vt_reliability_alpha", None)
     config.setdefault("vt_reliability_skip_below", 0.0)
     config.setdefault("vt_reliability_gamma", 0.0)
+    config.setdefault("ev_reliability_gamma", 0.0)
+    config.setdefault("max_iter_auto_extend", 0)
     config.setdefault("strict_audit", True)
     config.setdefault("audit_raise", False)
     config.setdefault("shared_power_solver", "highs")
@@ -376,6 +378,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     g_series = compute_g(n_series, data["parameters"]["mfd"])
     energy_surcharge = {s: {t: 0.0 for t in times} for s in stations}
     vt_service_prob = {s: {t: 1.0 for t in times} for s in stations}
+    ev_service_prob = {s: {t: 1.0 for t in times} for s in stations}
     min_iters = int(config.get("min_iters", 10))
     patience = int(config.get("patience", 5))
     stop_reason = "max_iters"
@@ -430,7 +433,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     x_new = arc_flows
     u_new = utilization
     good_count = 0
-    for iteration in range(config["max_iter"]):
+    current_max_iter = int(config["max_iter"])
+    auto_extend = int(config.get("max_iter_auto_extend", 0))
+    iteration = 0
+    while iteration < current_max_iter:
         last_iteration = iteration + 1
         g_by_time = {t: g_series[min(len(g_series) - 1, idx)] for idx, t in enumerate(times)}
         tau = compute_road_times(arc_flows, arc_params, g_by_time, times)
@@ -461,8 +467,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             data["parameters"]["lambda"],
             times,
             vt_service_prob=vt_service_prob,
+            ev_service_prob=ev_service_prob,
             vt_service_prob_floor=1.0e-4,
             vt_reliability_gamma=float(config["vt_reliability_gamma"]),
+            ev_reliability_gamma=float(config.get("ev_reliability_gamma", 0.0)),
             vt_service_prob_skip_below=float(config["vt_reliability_skip_below"]),
         )
 
@@ -554,10 +562,11 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         for s in stations:
             for t in times:
                 base_price = max(1.0e-6, float(electricity_price[s][t]))
-                cap = cap_mult * base_price
+                cap_abs = config.get("shadow_price_cap_abs")
+                cap = float(cap_abs) if cap_abs is not None else cap_mult * base_price
                 mu_kw = shadow_prices[s][t]
                 if diagnostics.get("shared_power_solver_used") == "highs":
-                    raw = shadow_scale * float(mu_kw or 0.0) / max(1e-6, delta_t)
+                    raw = shadow_scale * float(mu_kw or 0.0) / max(1e-9, delta_t)
                     raw_surcharge_uncapped[s][t] = raw
                     raw_surcharge[s][t] = min(raw, cap)
                 else:
@@ -627,6 +636,11 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 current_shed_ratio = 0.0 if float(e_vt_req[s][t]) <= 1.0e-12 else float((shed_vt or {}).get(s, {}).get(t, 0.0)) / max(1.0e-12, float(e_vt_req[s][t]))
                 current_shed_ratio = min(1.0, max(0.0, current_shed_ratio))
                 vt_prob_from_shed = min(1.0, max(0.0, 1.0 - current_shed_ratio))
+                ev_req_den = max(1.0e-9, float(p_ev_req_kw))
+                ev_prob_from_shed = 1.0 - float((shed_ev or {}).get(s, {}).get(t, 0.0)) / ev_req_den
+                ev_floor = float(config.get("vt_reliability_floor", 0.05))
+                ev_prob_from_shed = min(1.0, max(ev_floor, ev_prob_from_shed))
+                ev_service_prob[s][t] = ev_prob_from_shed
                 solver_used = diagnostics.get("shared_power_solver_used")
                 mu_entry = _clean_number(shadow_prices[s][t]) if (shadow_prices[s][t] is not None and solver_used == "highs") else None
                 uncapped_entry = _clean_number(raw_surcharge_uncapped[s][t]) if (raw_surcharge_uncapped[s][t] is not None and solver_used == "highs") else None
@@ -642,7 +656,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     "P_vt_req_kw_energy": _clean_number(p_vt_req_energy_kw),
                     "P_vt_req_kw_grid": _clean_number(p_vt_req_grid_kw),
                     "mu_kw": mu_entry,
+                    "raw_surcharge_uncapped_kwh": uncapped_entry,
                     "raw_surcharge_uncapped": uncapped_entry,
+                    "raw_surcharge_capped_kwh": _clean_number(raw_surcharge[s][t]),
                     "raw_surcharge_capped": _clean_number(raw_surcharge[s][t]),
                     "raw_surcharge": _clean_number(raw_surcharge[s][t]),
                     "heuristic_surcharge": _clean_number(heuristic_surcharge[s][t]) if solver_used != "highs" else None,
@@ -660,6 +676,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     "p_net_served_kw": p_net_served_kw,
                     "vt_service_prob_target": vt_service_prob_target[s][t],
                     "vt_service_prob": vt_service_prob[s][t],
+                    "ev_service_prob": ev_service_prob[s][t],
                     "shed_ratio": current_shed_ratio,
                     "solver_used": solver_used,
                     "fallback_used": fallback_used,
@@ -795,6 +812,11 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 stop_reason = "patience"
                 break
 
+        if iteration + 1 >= current_max_iter and dx > config["tol"] and auto_extend > 0 and current_max_iter < 1000:
+            current_max_iter = min(1000, current_max_iter + auto_extend)
+
+        iteration += 1
+
     residuals = compute_residuals(
         data,
         itineraries,
@@ -918,10 +940,13 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "cbd_tau_used": cbd_tau,
             "station_loads": load_agg,
             "vt_service_prob": vt_service_prob,
+            "ev_service_prob": ev_service_prob,
             "vt_inventory_B": B_vt_report,
             "vt_charge_power_P": P_vt_lp,
             "shared_power_lp": shared_power_lp_diag,
             "missing_inventory_reporting": missing_inventory_reporting,
+            "iter_count_total": last_iteration,
+            "max_iter_effective": current_max_iter,
         },
         "data_parameters": data.get("parameters", {}),
         "meta": data.get("meta", {}),
@@ -935,6 +960,13 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     }
     audit = self_audit(results, config)
     results["SelfAudit"] = audit
+    must_raise_tokens = [
+        "Requested HiGHS but non-HiGHS solver used",
+        "inventory balance broken",
+        "vt_service_prob out of range",
+    ]
+    if any(any(tok in s for tok in must_raise_tokens) for s in audit.get("severe", [])):
+        raise ValueError("Critical self-audit failure: " + "; ".join(audit.get("severe", [])))
     if bool(config.get("strict_audit", True)) and audit.get("warnings"):
         diagnostics["audit_warnings"] = audit["warnings"]
     return results, residuals
@@ -979,10 +1011,15 @@ def main() -> None:
     parser.add_argument("--dispatch", action="store_true", help="Run vehicle-level dispatch module")
     parser.add_argument("--report-out", "--report_out", dest="report_out", default="report.json", help="Path to report JSON output")
     parser.add_argument("--full_report", action="store_true", help="Write full report payload")
+    parser.add_argument("--full-json", dest="full_json", action=argparse.BooleanOptionalAction, default=True, help="Emit full diagnostics JSON")
+    parser.add_argument("data_pos", nargs="?", default=None, help="Optional positional data path")
     args = parser.parse_args()
 
     try:
-        data_path = _resolve_path(args.data, "project/data/simple_case.yaml")
+        data_arg = args.data
+        if args.data_pos:
+            data_arg = args.data_pos
+        data_path = _resolve_path(data_arg, "project/data/simple_case.yaml")
         schema_path = _resolve_path(args.schema, "project/data_schema.yaml")
         data = load_data(data_path, schema_path)
 
@@ -999,7 +1036,10 @@ def main() -> None:
         peak_prices_last = peak_snapshot[-1] if peak_snapshot else {}
         mode_share_last = results["diagnostics"].get("mode_share_by_group", [])
         mode_share_last = mode_share_last[-1] if mode_share_last else {}
-        output_full_json = bool(data.get("config", {}).get("output_full_json", True) or args.full_report)
+        output_full_json = bool(data.get("config", {}).get("output_full_json", True))
+        if args.full_report:
+            output_full_json = True
+        output_full_json = bool(output_full_json and args.full_json)
 
         git_commit = None
         try:
