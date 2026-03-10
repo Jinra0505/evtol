@@ -16,7 +16,8 @@ def generate_itineraries(
     if not config.get("use_generator", False):
         return []
     # Placeholder for V1+ MILP generation (not activated in toy data).
-    # If generation is enabled in the future, keep service-class-aware fallback fares.
+    # Future generator should support pure EV/eVTOL and multimodal EV_to_eVTOL fast/slow.
+    # Keep service-class-aware fallback fares for compatibility.
     _ = _default_evtol_fare(config, "fast")
     _ = _default_evtol_fare(config, "slow")
     return []

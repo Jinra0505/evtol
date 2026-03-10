@@ -22,6 +22,7 @@ from .assignment import (
     aggregate_vt_departure_flow_by_class,
     get_evtol_service_class,
     is_evtol_itinerary,
+    is_multimodal_evtol,
     build_incidence,
     compute_evtol_energy_demand,
     compute_itinerary_costs,
@@ -454,6 +455,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "max_surcharge_history": [],
         "price_snapshots": [],
         "mode_share": [],
+        "mode_share_by_supermode": [],
         "surcharge_history": [],
         "mode_share_by_group": [],
         "mode_share_by_service_class": [],
@@ -804,21 +806,25 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             }
         diagnostics["price_snapshots"].append(snapshot)
 
-        ev_total = 0.0
-        vt_total = 0.0
+        pure_ev_total = 0.0
+        pure_vt_total = 0.0
+        multimodal_total = 0.0
         if representative_od:
             for it in itineraries:
                 if f"{it['od'][0]}-{it['od'][1]}" != representative_od:
                     continue
-                for group, time_map in flows[it["id"]].items():
+                for _, time_map in flows[it["id"]].items():
                     val = time_map.get(peak_t, 0.0)
-                    if is_evtol_itinerary(it):
-                        vt_total += val
+                    if is_multimodal_evtol(it):
+                        multimodal_total += val
+                    elif is_evtol_itinerary(it):
+                        pure_vt_total += val
                     else:
-                        ev_total += val
-        total_flow = ev_total + vt_total
-        ev_share = ev_total / total_flow if total_flow > 0.0 else 0.0
-        vt_share = vt_total / total_flow if total_flow > 0.0 else 0.0
+                        pure_ev_total += val
+        total_flow = pure_ev_total + pure_vt_total + multimodal_total
+        ev_share = pure_ev_total / total_flow if total_flow > 0.0 else 0.0
+        vt_share = pure_vt_total / total_flow if total_flow > 0.0 else 0.0
+        mm_share = multimodal_total / total_flow if total_flow > 0.0 else 0.0
         diagnostics["mode_share"].append(
             {
                 "iteration": iteration + 1,
@@ -826,6 +832,15 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 "t": peak_t,
                 "ev_share": ev_share,
                 "vt_share": vt_share,
+                "multimodal_share": mm_share,
+            }
+        )
+        diagnostics["mode_share_by_supermode"].append(
+            {
+                "iteration": iteration + 1,
+                "od": representative_od,
+                "t": peak_t,
+                "shares": {"EV": ev_share, "eVTOL": vt_share, "EV_to_eVTOL": mm_share},
             }
         )
         mode_share_by_group = {}

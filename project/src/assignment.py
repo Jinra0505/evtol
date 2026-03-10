@@ -4,24 +4,67 @@ from typing import Any, Dict, List, Tuple
 from .utils import logsumexp
 
 
+EVTOL_MODES = {"eVTOL", "eVTOL_fast", "eVTOL_slow", "EV_to_eVTOL_fast", "EV_to_eVTOL_slow"}
+MULTIMODAL_MODES = {"EV_to_eVTOL_fast", "EV_to_eVTOL_slow"}
+
+
+def _value_by_time(x: Any, t: int, default: float = 0.0) -> float:
+    if isinstance(x, dict):
+        if t in x:
+            return float(x[t])
+        ts = str(t)
+        if ts in x:
+            return float(x[ts])
+        return float(default)
+    if x is None:
+        return float(default)
+    return float(x)
+
+
+def is_multimodal_evtol(it: Dict[str, Any]) -> bool:
+    return str(it.get("mode", "")) in MULTIMODAL_MODES
+
+
+def is_pure_evtol(it: Dict[str, Any]) -> bool:
+    return str(it.get("mode", "")) in {"eVTOL", "eVTOL_fast", "eVTOL_slow"}
+
+
 def is_evtol_itinerary(it: Dict[str, Any]) -> bool:
     mode = str(it.get("mode", ""))
-    if mode in {"eVTOL", "eVTOL_fast", "eVTOL_slow"}:
+    if mode in EVTOL_MODES:
         return True
     return str(it.get("service_class", "")).lower() in {"fast", "slow"}
 
 
 def get_evtol_service_class(it: Dict[str, Any]) -> str:
     mode = str(it.get("mode", ""))
-    if mode == "eVTOL_fast":
+    if mode.endswith("_fast"):
         return "fast"
-    if mode == "eVTOL_slow":
+    if mode.endswith("_slow"):
         return "slow"
     cls = str(it.get("service_class", "")).lower()
     if cls in {"fast", "slow"}:
         return cls
     return "slow"
 
+
+def _road_segments(it: Dict[str, Any]) -> List[Dict[str, Any]]:
+    segs = []
+    segs.extend(it.get("road_arcs", []))
+    segs.extend(it.get("access_arcs", []))
+    segs.extend(it.get("egress_arcs", []))
+    return segs
+
+
+def _ev_stops(it: Dict[str, Any]) -> List[Dict[str, Any]]:
+    stops = []
+    if str(it.get("mode")) == "EV":
+        stops.extend(it.get("stations", []))
+    if is_multimodal_evtol(it):
+        stops.extend(it.get("access_stations", []))
+        if not it.get("access_stations") and it.get("stations"):
+            stops.extend(it.get("stations", []))
+    return stops
 
 
 def build_incidence(
@@ -37,7 +80,7 @@ def build_incidence(
     inc_station = {s: {it["id"]: {t: 0.0 for t in times} for it in itineraries} for s in stations}
     for it in itineraries:
         it_id = it.get("id", "<unknown>")
-        for seg in it.get("road_arcs", []):
+        for seg in _road_segments(it):
             arc = seg["arc"]
             t = seg["t"]
             if arc not in arc_set:
@@ -46,7 +89,7 @@ def build_incidence(
                 raise KeyError(f"Unknown time in itinerary {it_id}: t={t}")
             frac = seg.get("frac", 1.0)
             inc_road[arc][it["id"]][t] += frac
-        for stop in it.get("stations", []):
+        for stop in _ev_stops(it):
             station = stop["station"]
             t = stop["t"]
             if station not in station_set:
@@ -59,9 +102,8 @@ def build_incidence(
             if dep_station is not None:
                 if dep_station not in station_set:
                     raise KeyError(f"Unknown dep_station in itinerary {it_id}: dep_station={dep_station}")
-                flight_time = it.get("flight_time", {})
                 for t in times:
-                    if flight_time.get(t, 0.0) > 0.0:
+                    if _value_by_time(it.get("flight_time", {}), t, 0.0) > 0.0:
                         inc_station[dep_station][it["id"]][t] += 1.0
     return inc_road, inc_station
 
@@ -77,56 +119,58 @@ def compute_itinerary_costs(
     costs: Dict[str, Dict[int, Dict[str, float]]] = {it["id"]: {} for it in itineraries}
     for it in itineraries:
         it_id = it.get("id", "<unknown>")
-        flight_time = it.get("flight_time", {})
-        base_money = it.get("money", 0.0)
-        phi_markup = it.get("phi_energy_markup", 1.0)
+        phi_markup = float(it.get("phi_energy_markup", 1.0))
         dep_station = it.get("dep_station")
-        e_per_pax = it.get("e_per_pax", 0.0)
         for t in times:
-            money_t = base_money
+            money_t = _value_by_time(it.get("money", 0.0), t, 0.0)
             tt = 0.0
             charge_cost = 0.0
-            for seg in it.get("road_arcs", []):
-                if seg["t"] == t:
-                    if seg["arc"] not in travel_times or t not in travel_times[seg["arc"]]:
-                        raise KeyError(f"Missing travel_times for itinerary {it_id}, arc={seg['arc']}, t={t}")
-                    tt += travel_times[seg["arc"]][t] * seg.get("frac", 1.0)
-            tt += float(flight_time.get(t, 0.0))
-            for stop in it.get("stations", []):
-                if stop["t"] == t:
-                    station = stop["station"]
-                    if station not in ev_station_waits or t not in ev_station_waits[station]:
-                        raise KeyError(f"Missing ev_station_waits for itinerary {it_id}, station={station}, t={t}")
-                    if station not in electricity_price or t not in electricity_price[station]:
-                        raise KeyError(f"Missing electricity_price for itinerary {it_id}, station={station}, t={t}")
-                    tt += ev_station_waits[station][t]
-                    energy = stop.get("energy", 0.0)
-                    charge_cost += energy * electricity_price[station][t]
-            if is_evtol_itinerary(it) and dep_station is not None:
-                if flight_time.get(t, 0.0) <= 0.0:
-                    costs[it["id"]][t] = {
-                        "TT": float("inf"),
-                        "Money": float("inf"),
-                        "ChargeCost": 0.0,
-                    }
+            for seg in _road_segments(it):
+                if seg["t"] != t:
                     continue
+                arc = seg["arc"]
+                if arc not in travel_times or t not in travel_times[arc]:
+                    raise KeyError(f"Missing travel_times for itinerary {it_id}, arc={arc}, t={t}")
+                tt += float(travel_times[arc][t]) * float(seg.get("frac", 1.0))
+
+            # EV component (pure EV or multimodal access)
+            for stop in _ev_stops(it):
+                if stop.get("t") != t:
+                    continue
+                station = stop.get("station")
+                if station not in ev_station_waits or t not in ev_station_waits[station]:
+                    raise KeyError(f"Missing ev_station_waits for itinerary {it_id}, station={station}, t={t}")
+                if station not in electricity_price or t not in electricity_price[station]:
+                    raise KeyError(f"Missing electricity_price for itinerary {it_id}, station={station}, t={t}")
+                tt += float(ev_station_waits[station][t])
+                charge_cost += float(stop.get("energy", 0.0)) * float(electricity_price[station][t])
+
+            # Optional explicit access energy (multimodal)
+            access_energy_kwh = _value_by_time(it.get("access_energy_kwh", 0.0), t, 0.0)
+            if access_energy_kwh > 0.0:
+                ref_station = dep_station
+                if ref_station is None and _ev_stops(it):
+                    ref_station = _ev_stops(it)[0].get("station")
+                if ref_station is not None and ref_station in electricity_price and t in electricity_price[ref_station]:
+                    charge_cost += access_energy_kwh * float(electricity_price[ref_station][t])
+
+            if is_evtol_itinerary(it) and dep_station is not None:
+                flight_time = _value_by_time(it.get("flight_time", {}), t, 0.0)
+                if flight_time <= 0.0:
+                    costs[it_id][t] = {"TT": float("inf"), "Money": float("inf"), "ChargeCost": 0.0}
+                    continue
+                tt += flight_time
                 svc_class = get_evtol_service_class(it)
-                if vt_departure_waits is None:
-                    vt_wait = 0.0
-                else:
+                if vt_departure_waits is not None:
                     if dep_station not in vt_departure_waits or svc_class not in vt_departure_waits[dep_station] or t not in vt_departure_waits[dep_station][svc_class]:
                         raise KeyError(f"Missing vt_departure_waits for itinerary {it_id}, dep_station={dep_station}, class={svc_class}, t={t}")
-                    vt_wait = vt_departure_waits[dep_station][svc_class][t]
+                    tt += float(vt_departure_waits[dep_station][svc_class][t])
+                e_per_pax = _value_by_time(it.get("e_per_pax", 0.0), t, 0.0)
                 if dep_station not in electricity_price or t not in electricity_price[dep_station]:
                     raise KeyError(f"Missing electricity_price for itinerary {it_id}, dep_station={dep_station}, t={t}")
-                tt += vt_wait
-                energy_fare = phi_markup * e_per_pax * electricity_price[dep_station][t]
-                money_t += energy_fare
-            costs[it["id"]][t] = {
-                "TT": tt,
-                "Money": money_t,
-                "ChargeCost": charge_cost,
-            }
+                money_t += phi_markup * e_per_pax * float(electricity_price[dep_station][t])
+
+            costs[it_id][t] = {"TT": tt, "Money": money_t, "ChargeCost": charge_cost}
     return costs
 
 
@@ -164,37 +208,35 @@ def logit_assignment(
                 alts = itineraries_by_od.get(od_key, [])
                 if not alts:
                     raise ValueError(f"No itineraries for OD {od_key}")
-                cost_values = []
                 available_alts = []
                 for it in alts:
-                    if is_evtol_itinerary(it):
-                        flight_time = it.get("flight_time", {})
-                        if flight_time.get(t, 0.0) <= 0.0:
-                            continue
+                    if is_evtol_itinerary(it) and _value_by_time(it.get("flight_time", {}), t, 0.0) <= 0.0:
+                        continue
                     available_alts.append(it)
                 if not available_alts:
                     raise ValueError(f"No available itineraries for OD {od_key} at t={t}")
+
                 feasible_alts = []
                 for it in available_alts:
                     comp = costs[it["id"]][t]
-                    gen_cost = vot[group][t] * comp["TT"] + comp["Money"] + comp["ChargeCost"]
+                    gen_cost = float(vot[group][t]) * comp["TT"] + comp["Money"] + comp["ChargeCost"]
                     generalized_costs[it["id"]][group][t] = gen_cost
                     if math.isinf(gen_cost):
                         continue
 
-                    service_prob = 1.0
+                    vt_prob = 1.0
                     if is_evtol_itinerary(it):
                         dep_station = it.get("dep_station")
                         if vt_service_prob and dep_station in vt_service_prob:
-                            service_prob = float(vt_service_prob[dep_station].get(t, 1.0))
-                        service_prob = min(1.0, max(vt_service_prob_floor, service_prob))
-                        if vt_service_prob_skip_below > 0.0 and service_prob < vt_service_prob_skip_below:
+                            vt_prob = float(vt_service_prob[dep_station].get(t, 1.0))
+                        vt_prob = min(1.0, max(vt_service_prob_floor, vt_prob))
+                        if vt_service_prob_skip_below > 0.0 and vt_prob < vt_service_prob_skip_below:
                             continue
+
                     ev_prob = 1.0
-                    if it.get("mode") == "EV" and ev_service_prob is not None:
-                        station_entries = it.get("stations", [])
+                    if ev_service_prob is not None:
                         ev_candidates = []
-                        for stop in station_entries:
+                        for stop in _ev_stops(it):
                             if stop.get("t") != t:
                                 continue
                             station = stop.get("station")
@@ -203,24 +245,22 @@ def logit_assignment(
                         if ev_candidates:
                             ev_prob = min(ev_candidates)
                     ev_prob = min(1.0, max(ev_service_prob_floor, ev_prob))
-                    if it.get("mode") == "EV" and ev_service_prob_skip_below > 0.0 and ev_prob < ev_service_prob_skip_below:
+                    if (str(it.get("mode", "")) == "EV" or is_multimodal_evtol(it)) and ev_service_prob_skip_below > 0.0 and ev_prob < ev_service_prob_skip_below:
                         continue
 
                     utility = (
-                        vt_reliability_gamma * math.log(service_prob)
+                        vt_reliability_gamma * math.log(max(vt_prob, vt_service_prob_floor))
                         + ev_reliability_gamma * math.log(max(ev_prob, ev_service_prob_floor))
                         - lambdas[group] * gen_cost
                     )
                     feasible_alts.append((it, utility))
+
                 total_demand = time_map.get(t, 0.0)
-                if total_demand <= 0.0:
-                    continue
-                if not feasible_alts:
+                if total_demand <= 0.0 or not feasible_alts:
                     continue
                 log_denom = logsumexp(util for _, util in feasible_alts)
                 for it, util in feasible_alts:
-                    share = math.exp(util - log_denom)
-                    flows[it["id"]][group][t] = total_demand * share
+                    flows[it["id"]][group][t] = total_demand * math.exp(util - log_denom)
     return flows, generalized_costs
 
 
@@ -231,16 +271,15 @@ def aggregate_arc_flows(
 ) -> Dict[str, Dict[int, float]]:
     arc_flows: Dict[str, Dict[int, float]] = {}
     for it in itineraries:
-        for seg in it.get("road_arcs", []):
+        for seg in _road_segments(it):
             arc_flows.setdefault(seg["arc"], {t: 0.0 for t in times})
     for it in itineraries:
-        for group, time_map in flows[it["id"]].items():
-            for seg in it.get("road_arcs", []):
+        for _, time_map in flows[it["id"]].items():
+            for seg in _road_segments(it):
                 arc = seg["arc"]
                 t = seg["t"]
-                arc_flows[arc][t] += seg.get("frac", 1.0) * time_map.get(t, 0.0)
+                arc_flows[arc][t] += float(seg.get("frac", 1.0)) * float(time_map.get(t, 0.0))
     return arc_flows
-
 
 
 def aggregate_ev_station_utilization(
@@ -250,46 +289,34 @@ def aggregate_ev_station_utilization(
 ) -> Dict[str, Dict[int, float]]:
     utilization: Dict[str, Dict[int, float]] = {}
     for it in itineraries:
-        if is_evtol_itinerary(it):
-            continue
-        for stop in it.get("stations", []):
+        for stop in _ev_stops(it):
             utilization.setdefault(stop["station"], {t: 0.0 for t in times})
     for it in itineraries:
-        if is_evtol_itinerary(it):
-            continue
-        for group, time_map in flows.get(it.get("id"), {}).items():
-            for stop in it.get("stations", []):
+        for _, time_map in flows.get(it.get("id"), {}).items():
+            for stop in _ev_stops(it):
                 station = stop["station"]
                 t = stop["t"]
-                utilization[station][t] += time_map.get(t, 0.0)
+                utilization[station][t] += float(time_map.get(t, 0.0))
     return utilization
+
 
 def aggregate_station_utilization(
     itineraries: List[Dict[str, Any]],
     flows: Dict[str, Dict[str, Dict[int, float]]],
     times: List[int],
 ) -> Dict[str, Dict[int, float]]:
-    utilization: Dict[str, Dict[int, float]] = {}
+    utilization = aggregate_ev_station_utilization(itineraries, flows, times)
     for it in itineraries:
-        for stop in it.get("stations", []):
-            utilization.setdefault(stop["station"], {t: 0.0 for t in times})
-        if is_evtol_itinerary(it):
-            dep_station = it.get("dep_station")
-            if dep_station is not None:
-                utilization.setdefault(dep_station, {t: 0.0 for t in times})
-    for it in itineraries:
-        for group, time_map in flows[it["id"]].items():
-            for stop in it.get("stations", []):
-                station = stop["station"]
-                t = stop["t"]
-                utilization[station][t] += time_map.get(t, 0.0)
-            if is_evtol_itinerary(it):
-                dep_station = it.get("dep_station")
-                if dep_station is not None:
-                    flight_time = it.get("flight_time", {})
-                    for t, val in time_map.items():
-                        if flight_time.get(t, 0.0) > 0.0:
-                            utilization[dep_station][t] += val
+        if not is_evtol_itinerary(it):
+            continue
+        dep_station = it.get("dep_station")
+        if dep_station is None:
+            continue
+        utilization.setdefault(dep_station, {t: 0.0 for t in times})
+        for _, time_map in flows.get(it.get("id"), {}).items():
+            for t in times:
+                if _value_by_time(it.get("flight_time", {}), t, 0.0) > 0.0:
+                    utilization[dep_station][t] += float(time_map.get(t, 0.0))
     return utilization
 
 
@@ -306,9 +333,9 @@ def aggregate_evtol_dep_demand(
         if dep_station is None:
             continue
         d_dep.setdefault(dep_station, {t: 0.0 for t in times})
-        for group, time_map in flows.get(it["id"], {}).items():
+        for _, time_map in flows.get(it["id"], {}).items():
             for t in times:
-                d_dep[dep_station][t] += time_map.get(t, 0.0)
+                d_dep[dep_station][t] += float(time_map.get(t, 0.0))
     return d_dep
 
 
@@ -319,14 +346,23 @@ def aggregate_ev_energy_demand(
 ) -> Dict[str, Dict[int, float]]:
     energy: Dict[str, Dict[int, float]] = {}
     for it in itineraries:
-        for stop in it.get("stations", []):
-            station = stop["station"]
-            energy.setdefault(station, {t: 0.0 for t in times})
-        for group, time_map in flows.get(it["id"], {}).items():
-            for stop in it.get("stations", []):
+        for stop in _ev_stops(it):
+            energy.setdefault(stop["station"], {t: 0.0 for t in times})
+    for it in itineraries:
+        for _, time_map in flows.get(it.get("id"), {}).items():
+            for stop in _ev_stops(it):
                 station = stop["station"]
                 t = stop["t"]
-                energy[station][t] += stop.get("energy", 0.0) * time_map.get(t, 0.0)
+                energy[station][t] += float(stop.get("energy", 0.0)) * float(time_map.get(t, 0.0))
+            for t in times:
+                access_energy = _value_by_time(it.get("access_energy_kwh", 0.0), t, 0.0)
+                if access_energy <= 0.0:
+                    continue
+                dep_station = it.get("dep_station")
+                if dep_station is None:
+                    continue
+                energy.setdefault(dep_station, {tt: 0.0 for tt in times})
+                energy[dep_station][t] += access_energy * float(time_map.get(t, 0.0))
     return energy
 
 
@@ -341,9 +377,9 @@ def aggregate_evtol_demand(
             continue
         it_id = it["id"]
         d_route[it_id] = {t: 0.0 for t in times}
-        for group, time_map in flows.get(it_id, {}).items():
+        for _, time_map in flows.get(it_id, {}).items():
             for t in times:
-                d_route[it_id][t] += time_map.get(t, 0.0)
+                d_route[it_id][t] += float(time_map.get(t, 0.0))
     return d_route
 
 
@@ -356,14 +392,12 @@ def compute_evtol_energy_demand(
     for it in itineraries:
         if not is_evtol_itinerary(it):
             continue
-        it_id = it["id"]
         dep_station = it.get("dep_station")
         if dep_station is None:
             continue
-        e_per_pax = it.get("e_per_pax", 0.0)
         e_dep.setdefault(dep_station, {t: 0.0 for t in times})
         for t in times:
-            e_dep[dep_station][t] += d_route.get(it_id, {}).get(t, 0.0) * e_per_pax
+            e_dep[dep_station][t] += d_route.get(it["id"], {}).get(t, 0.0) * _value_by_time(it.get("e_per_pax", 0.0), t, 0.0)
     return e_dep
 
 
@@ -381,7 +415,7 @@ def aggregate_vt_departure_flow_by_class(
             continue
         cls = get_evtol_service_class(it)
         out.setdefault(dep_station, {}).setdefault(cls, {t: 0.0 for t in times})
-        for group, time_map in flows.get(it.get("id"), {}).items():
+        for _, time_map in flows.get(it.get("id"), {}).items():
             for t in times:
                 out[dep_station][cls][t] += float(time_map.get(t, 0.0))
     for dep in out:

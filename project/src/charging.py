@@ -39,6 +39,8 @@ def compute_station_loads_from_flows(
 ) -> Dict[str, Dict[str, Dict[int, float]]]:
     """Aggregate EV/eVTOL station loads directly from itinerary flows.
 
+    Includes EV access charging loads from multimodal EV_to_eVTOL itineraries.
+
     Returns a dictionary with:
     - E_ev_req[s][t], P_ev_req_kw[s][t]
     - E_vt_req[s][t], P_vt_req_kw_energy[s][t], P_vt_req_kw_grid[s][t]
