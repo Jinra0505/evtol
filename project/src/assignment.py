@@ -48,6 +48,28 @@ def get_evtol_service_class(it: Dict[str, Any]) -> str:
     return "slow"
 
 
+
+
+def classify_mode_label(it: Dict[str, Any]) -> str:
+    if is_multimodal_evtol(it):
+        cls = get_evtol_service_class(it)
+        return f"multimodal_EV_to_eVTOL_{cls}"
+    mode = str(it.get("mode", ""))
+    if mode == "EV":
+        return "pure_EV"
+    if is_evtol_itinerary(it):
+        cls = get_evtol_service_class(it)
+        return f"pure_eVTOL_{cls}"
+    return "pure_EV"
+
+
+def classify_supermode(it: Dict[str, Any]) -> str:
+    if is_multimodal_evtol(it):
+        return "EV_to_eVTOL"
+    if is_evtol_itinerary(it):
+        return "eVTOL"
+    return "EV"
+
 def _road_segments(it: Dict[str, Any]) -> List[Dict[str, Any]]:
     segs = []
     segs.extend(it.get("road_arcs", []))
@@ -184,14 +206,28 @@ def logit_assignment(
     ev_reliability_gamma: float = 0.0,
     vt_service_prob_skip_below: float = 0.0,
     ev_service_prob_skip_below: float = 0.0,
-) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
+) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Any]]:
     all_groups = sorted({g for od_groups in demand.values() for g in od_groups.keys()})
     flows: Dict[str, Dict[str, Dict[int, float]]] = {
         it["id"]: {group: {t: 0.0 for t in times} for group in all_groups} for it in itineraries
     }
-    generalized_costs: Dict[str, Dict[str, Dict[int, float]]] = {
+    generalized_costs_raw: Dict[str, Dict[str, Dict[int, float]]] = {
         it["id"]: {group: {t: 0.0 for t in times} for group in all_groups} for it in itineraries
     }
+    generalized_costs_perceived: Dict[str, Dict[str, Dict[int, float]]] = {
+        it["id"]: {group: {t: 0.0 for t in times} for group in all_groups} for it in itineraries
+    }
+    utilities: Dict[str, Dict[str, Dict[int, float]]] = {
+        it["id"]: {group: {t: 0.0 for t in times} for group in all_groups} for it in itineraries
+    }
+    utility_breakdown: Dict[str, Dict[str, Dict[int, Dict[str, float]]]] = {
+        it["id"]: {group: {t: {} for t in times} for group in all_groups} for it in itineraries
+    }
+
+    unserved_demand: Dict[str, Dict[str, Dict[int, float]]] = {}
+    unserved_demand_total = 0.0
+    unserved_cases_count = 0
+
     itineraries_by_od: Dict[str, List[Dict[str, Any]]] = {}
     for it in itineraries:
         od_key = f"{it['od'][0]}-{it['od'][1]}"
@@ -212,11 +248,14 @@ def logit_assignment(
                     raise ValueError(f"No available itineraries for OD {od_key} at t={t}")
 
                 feasible_alts = []
+                total_demand = float(time_map.get(t, 0.0))
                 for it in available_alts:
                     comp = costs[it["id"]][t]
-                    gen_cost = float(vot[group][t]) * comp["TT"] + comp["Money"] + comp["ChargeCost"]
-                    generalized_costs[it["id"]][group][t] = gen_cost
-                    if math.isinf(gen_cost):
+                    raw_cost = float(vot[group][t]) * comp["TT"] + comp["Money"] + comp["ChargeCost"]
+                    generalized_costs_raw[it["id"]][group][t] = raw_cost
+                    if math.isinf(raw_cost):
+                        generalized_costs_perceived[it["id"]][group][t] = float("inf")
+                        utilities[it["id"]][group][t] = -float("inf")
                         continue
 
                     vt_prob = 1.0
@@ -243,20 +282,46 @@ def logit_assignment(
                     if (str(it.get("mode", "")) == "EV" or is_multimodal_evtol(it)) and ev_service_prob_skip_below > 0.0 and ev_prob < ev_service_prob_skip_below:
                         continue
 
-                    utility = (
-                        vt_reliability_gamma * math.log(max(vt_prob, vt_service_prob_floor))
-                        + ev_reliability_gamma * math.log(max(ev_prob, ev_service_prob_floor))
-                        - lambdas[group] * gen_cost
-                    )
-                    feasible_alts.append((it, utility))
+                    vt_term = vt_reliability_gamma * math.log(max(vt_prob, vt_service_prob_floor))
+                    ev_term = ev_reliability_gamma * math.log(max(ev_prob, ev_service_prob_floor))
+                    lam = max(float(lambdas[group]), 1.0e-9)
+                    perceived_cost = raw_cost - (vt_term + ev_term) / lam
+                    util = -lam * raw_cost + vt_term + ev_term
 
-                total_demand = time_map.get(t, 0.0)
-                if total_demand <= 0.0 or not feasible_alts:
+                    generalized_costs_perceived[it["id"]][group][t] = perceived_cost
+                    utilities[it["id"]][group][t] = util
+                    utility_breakdown[it["id"]][group][t] = {
+                        "raw_cost": raw_cost,
+                        "vt_prob": vt_prob,
+                        "ev_prob": ev_prob,
+                        "vt_reliability_term": vt_term,
+                        "ev_reliability_term": ev_term,
+                        "perceived_cost": perceived_cost,
+                    }
+                    feasible_alts.append((it, util))
+
+                if total_demand <= 0.0:
                     continue
+                if not feasible_alts:
+                    unserved_demand.setdefault(od_key, {}).setdefault(group, {})[t] = total_demand
+                    unserved_demand_total += total_demand
+                    unserved_cases_count += 1
+                    continue
+
                 log_denom = logsumexp(util for _, util in feasible_alts)
                 for it, util in feasible_alts:
                     flows[it["id"]][group][t] = total_demand * math.exp(util - log_denom)
-    return flows, generalized_costs
+
+    details = {
+        "generalized_costs": generalized_costs_perceived,
+        "generalized_costs_raw": generalized_costs_raw,
+        "utilities": utilities,
+        "utility_breakdown": utility_breakdown,
+        "unserved_demand": unserved_demand,
+        "unserved_demand_total": unserved_demand_total,
+        "unserved_cases_count": unserved_cases_count,
+    }
+    return flows, details
 
 
 def aggregate_arc_flows(
@@ -300,6 +365,8 @@ def aggregate_station_utilization(
     flows: Dict[str, Dict[str, Dict[int, float]]],
     times: List[int],
 ) -> Dict[str, Dict[int, float]]:
+    # DEPRECATED for C10 usage: this function includes eVTOL departure usage.
+    # Use aggregate_ev_station_utilization(...) for EV-related station utilization consistency checks.
     utilization = aggregate_ev_station_utilization(itineraries, flows, times)
     for it in itineraries:
         if not is_evtol_itinerary(it):

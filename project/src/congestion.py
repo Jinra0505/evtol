@@ -1,3 +1,4 @@
+import math
 from typing import Any, Dict, List, Tuple
 
 from .assignment import aggregate_vt_departure_flow_by_class
@@ -76,6 +77,9 @@ def compute_vt_departure_waits(
     w0_slow = float(config.get("vt_queue_w0_slow", 0.2))
 
     dep_flows = aggregate_vt_departure_flow_by_class(itineraries, flows, times)
+    for s in stations:
+        dep_flows.setdefault(s, {}).setdefault("fast", {t: 0.0 for t in times})
+        dep_flows.setdefault(s, {}).setdefault("slow", {t: 0.0 for t in times})
     waits: Dict[str, Dict[str, Dict[int, float]]] = {s: {"fast": {}, "slow": {}} for s in stations}
 
     for s in stations:
@@ -95,9 +99,9 @@ def compute_vt_departure_waits(
 
             w_fast = max(0.0, w0_fast + a_fast * (q_fast / cap_fast) ** g_fast)
             w_slow = max(0.0, w0_slow + a_slow * ((q_fast + q_slow) / cap_total) ** g_slow)
-            if w_fast != w_fast or w_fast == float("inf"):
+            if math.isnan(w_fast) or math.isinf(w_fast):
                 w_fast = 0.0
-            if w_slow != w_slow or w_slow == float("inf"):
+            if math.isnan(w_slow) or math.isinf(w_slow):
                 w_slow = 0.0
             waits[s]["fast"][t] = float(w_fast)
             waits[s]["slow"][t] = float(w_slow)

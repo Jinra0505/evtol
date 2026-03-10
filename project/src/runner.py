@@ -23,6 +23,8 @@ from .assignment import (
     get_evtol_service_class,
     is_evtol_itinerary,
     is_multimodal_evtol,
+    classify_mode_label,
+    classify_supermode,
     build_incidence,
     compute_evtol_energy_demand,
     compute_itinerary_costs,
@@ -211,6 +213,46 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     if expected_groups and any(g not in expected_groups for g in output_groups):
         severe.append("unexpected traveler group label in outputs")
 
+    util_def = str(diagnostics.get("station_utilization_definition", ""))
+    if "EV-related" not in util_def:
+        warnings.append("station utilization definition is ambiguous; ensure C10 uses EV-only utilization")
+
+    unserved_total = float(diagnostics.get("unserved_demand_total", 0.0) or 0.0)
+    if unserved_total > 1.0e-9:
+        severe.append("unserved demand exists because no feasible alternative remained")
+
+    mode_group_mode = diagnostics.get("mode_share_by_group_and_mode", [])
+    mode_group_old = diagnostics.get("mode_share_by_group", [])
+    if mode_group_mode and mode_group_old:
+        last_new = mode_group_mode[-1].get("shares", {})
+        last_old = mode_group_old[-1].get("shares", {})
+        for grp, comps in last_new.items():
+            mm = float(comps.get("multimodal_EV_to_eVTOL_fast", 0.0)) + float(comps.get("multimodal_EV_to_eVTOL_slow", 0.0))
+            old_vt = float(last_old.get(grp, {}).get("vt", 0.0))
+            pure_vt = float(comps.get("pure_eVTOL_fast", 0.0)) + float(comps.get("pure_eVTOL_slow", 0.0))
+            if mm > 1.0e-9 and old_vt > pure_vt + 1.0e-9:
+                severe.append("multimodal itineraries were merged into pure eVTOL shares")
+                break
+
+    vt_waits = diagnostics.get("vt_departure_waits", {})
+    fast_gt_slow = 0
+    fast_cmp_total = 0
+    for s, cls_map in vt_waits.items():
+        for t, wf in cls_map.get("fast", {}).items():
+            ws = cls_map.get("slow", {}).get(t)
+            if ws is None:
+                continue
+            wf = float(wf)
+            ws = float(ws)
+            if math.isnan(wf) or math.isinf(wf) or math.isnan(ws) or math.isinf(ws):
+                severe.append("vt departure waits contain NaN/Inf")
+                continue
+            fast_cmp_total += 1
+            if wf > ws + 1.0e-9:
+                fast_gt_slow += 1
+    if fast_cmp_total > 0 and fast_gt_slow / fast_cmp_total > 0.6:
+        warnings.append("fast departure waits are frequently above slow waits; check queue/capacity parameters")
+
     c2 = float(results.get("residuals", {}).get("C2", 0.0))
     c2_raw = float(results.get("residuals", {}).get("C2_raw", 0.0))
     if c2_raw <= 1.0e-9 and c2 > 1.0e-3:
@@ -371,6 +413,7 @@ def compute_residuals(
 
     for station in utilization:
         for t in times:
+            # C10 checks EV-related station utilization consistency only (via EV-only inc_station).
             expected_u = 0.0
             for it in itineraries:
                 for group, time_map in flows[it["id"]].items():
@@ -458,6 +501,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "mode_share_by_supermode": [],
         "surcharge_history": [],
         "mode_share_by_group": [],
+        "mode_share_by_group_and_mode": [],
+        "mode_share_by_group_and_supermode": [],
         "mode_share_by_service_class": [],
         "vt_departure_waits": {},
         "vt_departure_flow_by_class": {},
@@ -530,7 +575,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             times,
             vt_departure_waits=vt_departure_waits,
         )
-        flows, _ = logit_assignment(
+        flows, logit_details = logit_assignment(
             itineraries,
             costs,
             data["parameters"]["q"],
@@ -554,6 +599,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         )
         diagnostics["vt_departure_waits"] = vt_departure_waits
         diagnostics["vt_departure_flow_by_class"] = vt_departure_flow_by_class
+        diagnostics["unserved_demand"] = logit_details.get("unserved_demand", {})
+        diagnostics["unserved_demand_total"] = logit_details.get("unserved_demand_total", 0.0)
+        diagnostics["unserved_cases_count"] = logit_details.get("unserved_cases_count", 0)
 
         cap_pax = data["parameters"].get("vertiport_cap_pax")
         if cap_pax:
@@ -845,6 +893,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             }
         )
         mode_share_by_group = {}
+        mode_share_by_group_and_mode = {}
+        mode_share_by_group_and_supermode = {}
         if representative_od:
             expected_groups = set(data.get("sets", {}).get("groups", []))
             rep_its = [it for it in itineraries if f"{it['od'][0]}-{it['od'][1]}" == representative_od]
@@ -862,19 +912,33 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     f"No group keys found in flows for OD {representative_od}. "
                     f"Representative itineraries={[it['id'] for it in rep_its]}, flow keys={flow_keys}"
                 )
+            mode_keys = ["pure_EV", "pure_eVTOL_fast", "pure_eVTOL_slow", "multimodal_EV_to_eVTOL_fast", "multimodal_EV_to_eVTOL_slow"]
+            super_keys = ["EV", "eVTOL", "EV_to_eVTOL"]
             for grp in groups_in_flows:
-                ev_g = 0.0
-                vt_g = 0.0
+                mode_vals = {k: 0.0 for k in mode_keys}
+                super_vals = {k: 0.0 for k in super_keys}
                 for it in rep_its:
                     val = flows[it["id"]].get(grp, {}).get(peak_t, 0.0)
-                    if is_evtol_itinerary(it):
-                        vt_g += val
-                    else:
-                        ev_g += val
-                den = max(1e-12, ev_g + vt_g)
-                mode_share_by_group[grp] = {"ev": ev_g / den, "vt": vt_g / den}
+                    mlabel = classify_mode_label(it)
+                    smode = classify_supermode(it)
+                    mode_vals[mlabel] = mode_vals.get(mlabel, 0.0) + val
+                    super_vals[smode] = super_vals.get(smode, 0.0) + val
+                den_all = max(1e-12, sum(mode_vals.values()))
+                den_super = max(1e-12, sum(super_vals.values()))
+                mode_share_by_group_and_mode[grp] = {k: v / den_all for k, v in mode_vals.items()}
+                mode_share_by_group_and_supermode[grp] = {k: v / den_super for k, v in super_vals.items()}
+                mode_share_by_group[grp] = {
+                    "ev": mode_share_by_group_and_supermode[grp]["EV"],
+                    "vt": mode_share_by_group_and_supermode[grp]["eVTOL"],
+                }
         diagnostics["mode_share_by_group"].append(
             {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": mode_share_by_group}
+        )
+        diagnostics["mode_share_by_group_and_mode"].append(
+            {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": mode_share_by_group_and_mode}
+        )
+        diagnostics["mode_share_by_group_and_supermode"].append(
+            {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": mode_share_by_group_and_supermode}
         )
         service_class_share = {}
         if representative_od:
@@ -1044,6 +1108,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "w": ev_station_waits,
         "f": flows,
         "costs": costs,
+        "generalized_costs": logit_details.get("generalized_costs", {}),
+        "generalized_costs_raw": logit_details.get("generalized_costs_raw", {}),
+        "utilities": logit_details.get("utilities", {}),
         "d_vt_route": d_vt_route,
         "d_vt_dep": d_vt_dep,
         "e_dep": e_dep,
