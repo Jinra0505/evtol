@@ -430,8 +430,9 @@ def aggregate_station_utilization(
     flows: Dict[str, Dict[str, Dict[int, float]]],
     times: List[int],
 ) -> Dict[str, Dict[int, float]]:
-    # DEPRECATED for C10 usage: this function includes eVTOL departure usage.
-    # Use aggregate_ev_station_utilization(...) for EV-related station utilization consistency checks.
+    # DEPRECATED / legacy helper.
+    # This counts total station usage including eVTOL departure usage and must NOT be used
+    # for C10 / EV-related station utilization consistency.
     utilization = aggregate_ev_station_utilization(itineraries, flows, times)
     for it in itineraries:
         if not is_evtol_itinerary(it):

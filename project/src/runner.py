@@ -214,7 +214,10 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
         severe.append("unexpected traveler group label in outputs")
 
     util_def = str(diagnostics.get("station_utilization_definition", ""))
-    if "EV-related" not in util_def:
+    util_builder = str(diagnostics.get("station_utilization_builder", ""))
+    if util_builder != "aggregate_ev_station_utilization":
+        severe.append("wrong station utilization builder used for C10 / EV-related utilization")
+    if util_def != "EV_related_only":
         warnings.append("station utilization definition is ambiguous; ensure C10 uses EV-only utilization")
 
     unserved_total = float(diagnostics.get("unserved_demand_total", 0.0) or 0.0)
@@ -512,11 +515,14 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "mode_share_by_group_and_mode": [],
         "mode_share_by_group_and_supermode": [],
         "mode_share_by_service_class": [],
+        "pure_evtol_service_class_share": [],
+        "all_evtol_service_class_share": [],
         "vt_departure_waits": {},
         "vt_departure_flow_by_class": {},
         "power_tightness_summary_history": [],
         "power_tightness": {},
-        "station_utilization_definition": "EV-related station utilization only (EV stations + multimodal access_stations); excludes eVTOL departure queue usage",
+        "station_utilization_definition": "EV_related_only",
+        "station_utilization_builder": "aggregate_ev_station_utilization",
         "shared_power_solver_used": "unknown",
         "module_paths": {
             "runner_file": str(Path(__file__).resolve()),
@@ -526,6 +532,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "scipy_version": charging.SCIPY_VERSION,
         "scipy_ok": bool(charging.HAS_SCIPY),
         "lp_ok": None,
+        "mode_share_by_service_class_is_legacy_mixed": True,
+        "mode_share_by_service_class_legacy_note": "legacy mode_share_by_service_class mixes pure eVTOL and multimodal EV_to_eVTOL",
     }
 
     dx = 0.0
@@ -952,23 +960,41 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": mode_share_by_group_and_supermode}
         )
         service_class_share = {}
+        pure_evtol_service_class_share = {}
+        all_evtol_service_class_share = {}
         if representative_od:
             rep_its = [it for it in itineraries if f"{it['od'][0]}-{it['od'][1]}" == representative_od]
-            fast_total = 0.0
-            slow_total = 0.0
+            pure_fast_total = 0.0
+            pure_slow_total = 0.0
+            all_fast_total = 0.0
+            all_slow_total = 0.0
             for it in rep_its:
                 if not is_evtol_itinerary(it):
                     continue
                 cls = get_evtol_service_class(it)
                 for _, time_map in flows.get(it["id"], {}).items():
+                    val = time_map.get(peak_t, 0.0)
                     if cls == "fast":
-                        fast_total += time_map.get(peak_t, 0.0)
+                        all_fast_total += val
+                        if not is_multimodal_evtol(it):
+                            pure_fast_total += val
                     else:
-                        slow_total += time_map.get(peak_t, 0.0)
-            den = max(1.0e-12, fast_total + slow_total)
-            service_class_share = {"fast": fast_total / den, "slow": slow_total / den}
+                        all_slow_total += val
+                        if not is_multimodal_evtol(it):
+                            pure_slow_total += val
+            den_all = max(1.0e-12, all_fast_total + all_slow_total)
+            den_pure = max(1.0e-12, pure_fast_total + pure_slow_total)
+            all_evtol_service_class_share = {"fast": all_fast_total / den_all, "slow": all_slow_total / den_all}
+            pure_evtol_service_class_share = {"fast": pure_fast_total / den_pure, "slow": pure_slow_total / den_pure}
+            service_class_share = dict(all_evtol_service_class_share)
         diagnostics["mode_share_by_service_class"].append(
             {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": service_class_share}
+        )
+        diagnostics["pure_evtol_service_class_share"].append(
+            {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": pure_evtol_service_class_share}
+        )
+        diagnostics["all_evtol_service_class_share"].append(
+            {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": all_evtol_service_class_share}
         )
         diagnostics["surcharge_history"].append(
             {
