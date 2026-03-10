@@ -463,6 +463,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "vt_departure_flow_by_class": {},
         "power_tightness_summary_history": [],
         "power_tightness": {},
+        "station_utilization_definition": "EV-related station utilization only (EV stations + multimodal access_stations); excludes eVTOL departure queue usage",
         "shared_power_solver_used": "unknown",
         "module_paths": {
             "runner_file": str(Path(__file__).resolve()),

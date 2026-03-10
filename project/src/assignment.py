@@ -77,6 +77,9 @@ def build_incidence(
     station_set = set(stations)
     time_set = set(times)
     inc_road = {arc: {it["id"]: {t: 0.0 for t in times} for it in itineraries} for arc in arcs}
+    # NOTE: inc_station is EV-related station utilization only.
+    # eVTOL departure waiting is modeled separately via vt_departure_waits
+    # and is intentionally excluded from C10 consistency checks.
     inc_station = {s: {it["id"]: {t: 0.0 for t in times} for it in itineraries} for s in stations}
     for it in itineraries:
         it_id = it.get("id", "<unknown>")
@@ -97,14 +100,6 @@ def build_incidence(
             if t not in time_set:
                 raise KeyError(f"Unknown time in itinerary {it_id}: t={t}")
             inc_station[station][it["id"]][t] += 1.0
-        if is_evtol_itinerary(it):
-            dep_station = it.get("dep_station")
-            if dep_station is not None:
-                if dep_station not in station_set:
-                    raise KeyError(f"Unknown dep_station in itinerary {it_id}: dep_station={dep_station}")
-                for t in times:
-                    if _value_by_time(it.get("flight_time", {}), t, 0.0) > 0.0:
-                        inc_station[dep_station][it["id"]][t] += 1.0
     return inc_road, inc_station
 
 
