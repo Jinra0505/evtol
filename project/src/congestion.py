@@ -1,4 +1,6 @@
-from typing import Dict, List
+from typing import Any, Dict, List, Tuple
+
+from .assignment import aggregate_vt_departure_flow_by_class
 
 
 def _safe_den(x, eps: float = 1e-6) -> float:
@@ -51,3 +53,53 @@ def compute_station_waits(
             u = utilization.get(station, {}).get(t, 0.0)
             waits[station][t] = w0 * (1.0 + 0.15 * (u / cap) ** 4)
     return waits
+
+
+def compute_vt_departure_waits(
+    data: Dict[str, Any],
+    itineraries: List[Dict[str, Any]],
+    flows: Dict[str, Dict[str, Dict[int, float]]],
+    times: List[int],
+    config: Dict[str, Any],
+) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
+    stations = data.get("sets", {}).get("stations", [])
+    station_params = data.get("parameters", {}).get("stations", {})
+    vt_caps = data.get("parameters", {}).get("vt_departure_capacity", {})
+    vt_caps_total = data.get("parameters", {}).get("vt_departure_capacity_total", {})
+    vt_caps_fast = data.get("parameters", {}).get("vt_departure_capacity_fast", {})
+
+    a_fast = float(config.get("vt_queue_a_fast", 1.0))
+    a_slow = float(config.get("vt_queue_a_slow", 1.5))
+    g_fast = float(config.get("vt_queue_gamma_fast", 2.0))
+    g_slow = float(config.get("vt_queue_gamma_slow", 2.0))
+    w0_fast = float(config.get("vt_queue_w0_fast", 0.1))
+    w0_slow = float(config.get("vt_queue_w0_slow", 0.2))
+
+    dep_flows = aggregate_vt_departure_flow_by_class(itineraries, flows, times)
+    waits: Dict[str, Dict[str, Dict[int, float]]] = {s: {"fast": {}, "slow": {}} for s in stations}
+
+    for s in stations:
+        for t in times:
+            q_fast = float(dep_flows.get(s, {}).get("fast", {}).get(t, 0.0))
+            q_slow = float(dep_flows.get(s, {}).get("slow", {}).get(t, 0.0))
+            cap_total = vt_caps_total.get(s, {}).get(t)
+            if cap_total is None:
+                cap_total = vt_caps.get(s, {}).get(t)
+            if cap_total is None:
+                cap_total = max(1.0, 0.3 * float(station_params.get(s, {}).get("P_site", {}).get(t, 0.0)))
+            cap_total = _safe_den(cap_total)
+            cap_fast = vt_caps_fast.get(s, {}).get(t)
+            if cap_fast is None:
+                cap_fast = 0.4 * cap_total
+            cap_fast = _safe_den(cap_fast)
+
+            w_fast = max(0.0, w0_fast + a_fast * (q_fast / cap_fast) ** g_fast)
+            w_slow = max(0.0, w0_slow + a_slow * ((q_fast + q_slow) / cap_total) ** g_slow)
+            if w_fast != w_fast or w_fast == float("inf"):
+                w_fast = 0.0
+            if w_slow != w_slow or w_slow == float("inf"):
+                w_slow = 0.0
+            waits[s]["fast"][t] = float(w_fast)
+            waits[s]["slow"][t] = float(w_slow)
+
+    return waits, dep_flows

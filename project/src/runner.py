@@ -18,6 +18,10 @@ from .assignment import (
     aggregate_evtol_dep_demand,
     aggregate_evtol_demand,
     aggregate_station_utilization,
+    aggregate_ev_station_utilization,
+    aggregate_vt_departure_flow_by_class,
+    get_evtol_service_class,
+    is_evtol_itinerary,
     build_incidence,
     compute_evtol_energy_demand,
     compute_itinerary_costs,
@@ -25,7 +29,7 @@ from .assignment import (
 )
 from . import charging
 from .charging import compute_station_loads_from_flows, solve_charging
-from .congestion import compute_road_times, compute_station_waits
+from .congestion import compute_road_times, compute_station_waits, compute_vt_departure_waits
 from .data_loader import load_data
 from .itinerary_generator import generate_itineraries
 from .mfd import boundary_flows, compute_g, update_accumulation
@@ -182,6 +186,30 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     if cap_binding:
         warnings.append("price cap binding detected; report capped and uncapped surcharge in analysis")
 
+    stop_reason = diagnostics.get("stop_reason")
+    tol = float(diagnostics.get("tol", config.get("tol", 0.0)) or 0.0)
+    dx_end = diagnostics.get("dx_end", results.get("convergence", {}).get("dx"))
+    dn_end = diagnostics.get("dn_end", results.get("convergence", {}).get("dn"))
+    dprice_end = diagnostics.get("dprice_end", results.get("convergence", {}).get("dprice"))
+    if stop_reason != "patience":
+        severe.append("did not stop by patience")
+    if tol > 0.0:
+        dx_bad = dx_end is not None and float(dx_end) > tol
+        dn_bad = dn_end is not None and float(dn_end) > tol
+        dprice_bad = dprice_end is not None and float(dprice_end) > tol
+        if dx_bad or dn_bad or dprice_bad:
+            severe.append("convergence thresholds not satisfied")
+
+    expected_groups = set(results.get("data_parameters", {}).get("lambda", {}).keys())
+    output_groups = set()
+    for entry in diagnostics.get("mode_share_by_group", []):
+        output_groups.update((entry or {}).get("shares", {}).keys())
+    flow_map = results.get("f", {})
+    for g_map in flow_map.values():
+        output_groups.update(g_map.keys())
+    if expected_groups and any(g not in expected_groups for g in output_groups):
+        severe.append("unexpected traveler group label in outputs")
+
     c2 = float(results.get("residuals", {}).get("C2", 0.0))
     c2_raw = float(results.get("residuals", {}).get("C2_raw", 0.0))
     if c2_raw <= 1.0e-9 and c2 > 1.0e-3:
@@ -221,7 +249,7 @@ def _apply_vertiport_caps(
     for it in itineraries:
         od_key = f"{it['od'][0]}-{it['od'][1]}"
         itineraries_by_od.setdefault(od_key, []).append(it)
-        if it.get("mode") == "eVTOL" and it.get("dep_station") is not None:
+        if is_evtol_itinerary(it) and it.get("dep_station") is not None:
             evtol_by_dep.setdefault(it["dep_station"], []).append(it)
 
     for dep, it_list in evtol_by_dep.items():
@@ -249,7 +277,7 @@ def _apply_vertiport_caps(
                 alternatives = [
                     it
                     for it in itineraries_by_od.get(od_key, [])
-                    if it.get("mode") != "eVTOL"
+                    if not is_evtol_itinerary(it)
                 ]
                 if not alternatives:
                     raise ValueError(f"No non-eVTOL alternative to enforce cap for {od_key}, {group}, t={t}")
@@ -428,6 +456,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "mode_share": [],
         "surcharge_history": [],
         "mode_share_by_group": [],
+        "mode_share_by_service_class": [],
+        "vt_departure_waits": {},
+        "vt_departure_flow_by_class": {},
         "power_tightness_summary_history": [],
         "power_tightness": {},
         "shared_power_solver_used": "unknown",
@@ -469,16 +500,19 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     auto_extend = int(config.get("auto_extend_step", config.get("max_iter_auto_extend", 0)))
     max_total_iter = int(config.get("max_total_iter", 800))
     iteration = 0
+    ev_station_waits = {s: {t: 0.0 for t in times} for s in stations}
+    vt_departure_waits = {s: {"fast": {t: 0.0 for t in times}, "slow": {t: 0.0 for t in times}} for s in stations}
+    vt_departure_flow_by_class = {s: {"fast": {t: 0.0 for t in times}, "slow": {t: 0.0 for t in times}} for s in stations}
     while iteration < current_max_iter and iteration < max_total_iter:
         last_iteration = iteration + 1
         g_by_time = {t: g_series[min(len(g_series) - 1, idx)] for idx, t in enumerate(times)}
         tau = compute_road_times(arc_flows, arc_params, g_by_time, times)
-        waits = compute_station_waits(utilization, station_params, times)
+        ev_station_waits = compute_station_waits(utilization, station_params, times)
         effective_prices = {
             s: {t: electricity_price[s][t] + energy_surcharge[s][t] for t in times}
             for s in stations
         }
-        generated = generate_itineraries(data, tau, waits, config)
+        generated = generate_itineraries(data, tau, ev_station_waits, config)
         if generated:
             for it in generated:
                 if it["id"] not in seen_ids:
@@ -488,9 +522,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         costs = compute_itinerary_costs(
             itineraries,
             tau,
-            waits,
+            ev_station_waits,
             effective_prices,
             times,
+            vt_departure_waits=vt_departure_waits,
         )
         flows, _ = logit_assignment(
             itineraries,
@@ -507,6 +542,15 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             ev_reliability_gamma=float(config.get("ev_reliability_gamma", 0.0)),
             vt_service_prob_skip_below=float(config["vt_reliability_skip_below"]),
         )
+        vt_departure_waits, vt_departure_flow_by_class = compute_vt_departure_waits(
+            data,
+            itineraries,
+            flows,
+            times,
+            config,
+        )
+        diagnostics["vt_departure_waits"] = vt_departure_waits
+        diagnostics["vt_departure_flow_by_class"] = vt_departure_flow_by_class
 
         cap_pax = data["parameters"].get("vertiport_cap_pax")
         if cap_pax:
@@ -517,7 +561,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         e_dep = compute_evtol_energy_demand(d_vt_route, itineraries, times)
 
         x_new = aggregate_arc_flows(itineraries, flows, times)
-        u_new = aggregate_station_utilization(itineraries, flows, times)
+        u_new = aggregate_ev_station_utilization(itineraries, flows, times)
         x_new = _fill_missing(x_new, arcs, times)
         u_new = _fill_missing(u_new, stations, times)
 
@@ -768,7 +812,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     continue
                 for group, time_map in flows[it["id"]].items():
                     val = time_map.get(peak_t, 0.0)
-                    if it.get("mode") == "eVTOL":
+                    if is_evtol_itinerary(it):
                         vt_total += val
                     else:
                         ev_total += val
@@ -786,12 +830,14 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         )
         mode_share_by_group = {}
         if representative_od:
+            expected_groups = set(data.get("sets", {}).get("groups", []))
             rep_its = [it for it in itineraries if f"{it['od'][0]}-{it['od'][1]}" == representative_od]
             groups_in_flows = sorted(
                 {
                     grp
                     for it in rep_its
                     for grp in flows.get(it["id"], {}).keys()
+                    if (not expected_groups) or (grp in expected_groups)
                 }
             )
             if not groups_in_flows:
@@ -805,7 +851,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 vt_g = 0.0
                 for it in rep_its:
                     val = flows[it["id"]].get(grp, {}).get(peak_t, 0.0)
-                    if it.get("mode") == "eVTOL":
+                    if is_evtol_itinerary(it):
                         vt_g += val
                     else:
                         ev_g += val
@@ -813,6 +859,25 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 mode_share_by_group[grp] = {"ev": ev_g / den, "vt": vt_g / den}
         diagnostics["mode_share_by_group"].append(
             {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": mode_share_by_group}
+        )
+        service_class_share = {}
+        if representative_od:
+            rep_its = [it for it in itineraries if f"{it['od'][0]}-{it['od'][1]}" == representative_od]
+            fast_total = 0.0
+            slow_total = 0.0
+            for it in rep_its:
+                if not is_evtol_itinerary(it):
+                    continue
+                cls = get_evtol_service_class(it)
+                for _, time_map in flows.get(it["id"], {}).items():
+                    if cls == "fast":
+                        fast_total += time_map.get(peak_t, 0.0)
+                    else:
+                        slow_total += time_map.get(peak_t, 0.0)
+            den = max(1.0e-12, fast_total + slow_total)
+            service_class_share = {"fast": fast_total / den, "slow": slow_total / den}
+        diagnostics["mode_share_by_service_class"].append(
+            {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": service_class_share}
         )
         diagnostics["surcharge_history"].append(
             {
@@ -960,7 +1025,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "n": n_series,
         "g": g_series,
         "u": utilization,
-        "w": waits,
+        "w": ev_station_waits,
         "f": flows,
         "costs": costs,
         "d_vt_route": d_vt_route,
@@ -1004,6 +1069,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "missing_inventory_reporting": missing_inventory_reporting,
             "iter_count_total": last_iteration,
             "max_iter_effective": current_max_iter,
+            "tol": config.get("tol"),
+            "dx_end": dx,
+            "dn_end": dn,
+            "dprice_end": dprice,
         },
         "data_parameters": data.get("parameters", {}),
         "meta": data.get("meta", {}),

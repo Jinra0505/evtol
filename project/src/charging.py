@@ -1,6 +1,6 @@
 from typing import Any, Dict, Tuple
 
-from .assignment import aggregate_ev_energy_demand, aggregate_evtol_demand, compute_evtol_energy_demand
+from .assignment import aggregate_ev_energy_demand, aggregate_evtol_demand, aggregate_vt_departure_flow_by_class, compute_evtol_energy_demand
 
 HAS_GUROBI = False
 try:
@@ -51,6 +51,7 @@ def compute_station_loads_from_flows(
     d_vt_route = aggregate_evtol_demand(flows, itineraries, times)
     e_vt_dep = compute_evtol_energy_demand(d_vt_route, itineraries, times)
     e_ev_station = aggregate_ev_energy_demand(itineraries, flows, times)
+    vt_departure_flow_by_class = aggregate_vt_departure_flow_by_class(itineraries, flows, times)
 
     E_ev_req = {s: {t: 0.0 for t in times} for s in stations}
     E_vt_req = {s: {t: 0.0 for t in times} for s in stations}
@@ -80,6 +81,7 @@ def compute_station_loads_from_flows(
         "P_vt_req_kw_energy": P_vt_req_energy,
         "P_vt_req_kw_grid": P_vt_req_grid,
         "P_total_req": P_total_req,
+        "vt_departure_flow_by_class": vt_departure_flow_by_class,
     }
 
 
@@ -606,13 +608,14 @@ def solve_shared_power_inventory_lp(
     try:
         B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals, lp_diag = _solve_shared_power_core(data, times, e_dep, ev_energy)
         diagnostics_ref["lp_ok"] = True
+        diagnostics_ref["lp_failure"] = None
     except LPFailed as exc:
         diagnostics_ref["lp_ok"] = False
-        diagnostics_ref["lp_failure"] = exc.payload
+        diagnostics_ref["lp_failure"] = {**exc.payload, "fallback_solver": "heuristic"}
         B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals, lp_diag = _solve_shared_power_core_heuristic(data, times, e_dep, ev_energy)
     except Exception as exc:
         diagnostics_ref["lp_ok"] = False
-        diagnostics_ref["lp_failure"] = {"status": None, "message": repr(exc), "fun": None, "nit": None, "max_ub_violation": None, "max_eq_violation": None, "n_vars": None, "A_ub_shape": None, "A_eq_shape": None, "n_bounds": None}
+        diagnostics_ref["lp_failure"] = {"status": None, "message": repr(exc), "fun": None, "nit": None, "max_ub_violation": None, "max_eq_violation": None, "n_vars": None, "A_ub_shape": None, "A_eq_shape": None, "n_bounds": None, "fallback_solver": "heuristic"}
         B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals, lp_diag = _solve_shared_power_core_heuristic(data, times, e_dep, ev_energy)
 
     key_mismatch = 0.0
