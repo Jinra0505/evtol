@@ -228,11 +228,19 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
         last_old = mode_group_old[-1].get("shares", {})
         for grp, comps in last_new.items():
             mm = float(comps.get("multimodal_EV_to_eVTOL_fast", 0.0)) + float(comps.get("multimodal_EV_to_eVTOL_slow", 0.0))
-            old_vt = float(last_old.get(grp, {}).get("vt", 0.0))
-            pure_vt = float(comps.get("pure_eVTOL_fast", 0.0)) + float(comps.get("pure_eVTOL_slow", 0.0))
-            if mm > 1.0e-9 and old_vt > pure_vt + 1.0e-9:
-                severe.append("multimodal itineraries were merged into pure eVTOL shares")
-                break
+            old_grp = last_old.get(grp, {})
+            if "ev" in old_grp or "vt" in old_grp:
+                warnings.append("legacy mode_share_by_group omits multimodal split; use mode_share_by_group_and_supermode instead")
+                old_vt = float(old_grp.get("vt", 0.0))
+                pure_vt = float(comps.get("pure_eVTOL_fast", 0.0)) + float(comps.get("pure_eVTOL_slow", 0.0))
+                if mm > 1.0e-9 and old_vt > pure_vt + 1.0e-9:
+                    severe.append("multimodal itineraries were merged into pure eVTOL shares")
+                    break
+            else:
+                old_mm = float(old_grp.get("EV_to_eVTOL", 0.0))
+                if abs(old_mm - mm) > 1.0e-6:
+                    severe.append("multimodal itineraries were merged into pure eVTOL shares")
+                    break
 
     vt_waits = diagnostics.get("vt_departure_waits", {})
     fast_gt_slow = 0
@@ -574,6 +582,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             effective_prices,
             times,
             vt_departure_waits=vt_departure_waits,
+            transfer_time_by_station=data.get("parameters", {}).get("transfer_time_by_station"),
+            transfer_time_default=float(data.get("parameters", {}).get("transfer_time_default", 0.0)),
         )
         flows, logit_details = logit_assignment(
             itineraries,
@@ -928,8 +938,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 mode_share_by_group_and_mode[grp] = {k: v / den_all for k, v in mode_vals.items()}
                 mode_share_by_group_and_supermode[grp] = {k: v / den_super for k, v in super_vals.items()}
                 mode_share_by_group[grp] = {
-                    "ev": mode_share_by_group_and_supermode[grp]["EV"],
-                    "vt": mode_share_by_group_and_supermode[grp]["eVTOL"],
+                    "EV": mode_share_by_group_and_supermode[grp]["EV"],
+                    "eVTOL": mode_share_by_group_and_supermode[grp]["eVTOL"],
+                    "EV_to_eVTOL": mode_share_by_group_and_supermode[grp]["EV_to_eVTOL"],
                 }
         diagnostics["mode_share_by_group"].append(
             {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": mode_share_by_group}

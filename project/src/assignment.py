@@ -89,6 +89,24 @@ def _ev_stops(it: Dict[str, Any]) -> List[Dict[str, Any]]:
     return stops
 
 
+def _access_station_ids(it: Dict[str, Any], t: int | None = None) -> List[str]:
+    access = it.get("access_stations", [])
+    out: List[str] = []
+    for st in access:
+        if t is not None and st.get("t") != t:
+            continue
+        sid = st.get("station")
+        if sid is not None:
+            out.append(str(sid))
+    if out:
+        return out
+    for st in access:
+        sid = st.get("station")
+        if sid is not None:
+            out.append(str(sid))
+    return out
+
+
 def build_incidence(
     itineraries: List[Dict[str, Any]],
     arcs: List[str],
@@ -132,6 +150,8 @@ def compute_itinerary_costs(
     electricity_price: Dict[str, Dict[int, float]],
     times: List[int],
     vt_departure_waits: Dict[str, Dict[str, Dict[int, float]]] | None = None,
+    transfer_time_by_station: Dict[str, float] | Dict[str, Dict[int, float]] | None = None,
+    transfer_time_default: float = 0.0,
 ) -> Dict[str, Dict[int, Dict[str, float]]]:
     costs: Dict[str, Dict[int, Dict[str, float]]] = {it["id"]: {} for it in itineraries}
     for it in itineraries:
@@ -162,20 +182,52 @@ def compute_itinerary_costs(
                 tt += float(ev_station_waits[station][t])
                 charge_cost += float(stop.get("energy", 0.0)) * float(electricity_price[station][t])
 
+            transfer_time_applied = 0.0
+            transfer_time_source = "none"
+            access_energy_price_source = "none"
+
             # Optional explicit access energy (multimodal)
             access_energy_kwh = _value_by_time(it.get("access_energy_kwh", 0.0), t, 0.0)
             if access_energy_kwh > 0.0:
-                ref_station = dep_station
-                if ref_station is None and _ev_stops(it):
-                    ref_station = _ev_stops(it)[0].get("station")
-                if ref_station is not None and ref_station in electricity_price and t in electricity_price[ref_station]:
-                    charge_cost += access_energy_kwh * float(electricity_price[ref_station][t])
+                access_station_ids = _access_station_ids(it, t)
+                if access_station_ids:
+                    prices = []
+                    for sid in access_station_ids:
+                        if sid not in electricity_price or t not in electricity_price[sid]:
+                            raise KeyError(f"Missing electricity_price for itinerary {it_id}, access_station={sid}, t={t}")
+                        prices.append(float(electricity_price[sid][t]))
+                    if prices:
+                        charge_cost += access_energy_kwh * (sum(prices) / len(prices))
+                        access_energy_price_source = "access_station_mean"
+                elif dep_station is not None and dep_station in electricity_price and t in electricity_price[dep_station]:
+                    charge_cost += access_energy_kwh * float(electricity_price[dep_station][t])
+                    access_energy_price_source = "dep_station_fallback"
 
             if is_evtol_itinerary(it) and dep_station is not None:
                 flight_time = _value_by_time(it.get("flight_time", {}), t, 0.0)
                 if flight_time <= 0.0:
-                    costs[it_id][t] = {"TT": float("inf"), "Money": float("inf"), "ChargeCost": 0.0}
+                    costs[it_id][t] = {
+                        "TT": float("inf"),
+                        "Money": float("inf"),
+                        "ChargeCost": 0.0,
+                        "cost_breakdown": {
+                            "transfer_time_applied": 0.0,
+                            "transfer_time_source": "none",
+                            "access_energy_price_source": access_energy_price_source,
+                        },
+                    }
                     continue
+                if is_multimodal_evtol(it):
+                    if "transfer_time" in it:
+                        transfer_time_applied = _value_by_time(it.get("transfer_time", 0.0), t, 0.0)
+                        transfer_time_source = "itinerary"
+                    elif dep_station is not None and transfer_time_by_station and dep_station in transfer_time_by_station:
+                        transfer_time_applied = _value_by_time(transfer_time_by_station.get(dep_station, 0.0), t, 0.0)
+                        transfer_time_source = "station_default"
+                    elif transfer_time_default > 0.0:
+                        transfer_time_applied = float(transfer_time_default)
+                        transfer_time_source = "global_default"
+                    tt += transfer_time_applied
                 tt += flight_time
                 svc_class = get_evtol_service_class(it)
                 if vt_departure_waits is not None:
@@ -187,7 +239,16 @@ def compute_itinerary_costs(
                     raise KeyError(f"Missing electricity_price for itinerary {it_id}, dep_station={dep_station}, t={t}")
                 money_t += phi_markup * e_per_pax * float(electricity_price[dep_station][t])
 
-            costs[it_id][t] = {"TT": tt, "Money": money_t, "ChargeCost": charge_cost}
+            costs[it_id][t] = {
+                "TT": tt,
+                "Money": money_t,
+                "ChargeCost": charge_cost,
+                "cost_breakdown": {
+                    "transfer_time_applied": transfer_time_applied,
+                    "transfer_time_source": transfer_time_source,
+                    "access_energy_price_source": access_energy_price_source,
+                },
+            }
     return costs
 
 
@@ -290,6 +351,7 @@ def logit_assignment(
 
                     generalized_costs_perceived[it["id"]][group][t] = perceived_cost
                     utilities[it["id"]][group][t] = util
+                    cb = comp.get("cost_breakdown", {}) if isinstance(comp, dict) else {}
                     utility_breakdown[it["id"]][group][t] = {
                         "raw_cost": raw_cost,
                         "vt_prob": vt_prob,
@@ -297,6 +359,9 @@ def logit_assignment(
                         "vt_reliability_term": vt_term,
                         "ev_reliability_term": ev_term,
                         "perceived_cost": perceived_cost,
+                        "transfer_time_applied": float(cb.get("transfer_time_applied", 0.0) or 0.0),
+                        "transfer_time_source": str(cb.get("transfer_time_source", "none")),
+                        "access_energy_price_source": str(cb.get("access_energy_price_source", "none")),
                     }
                     feasible_alts.append((it, util))
 
@@ -420,11 +485,20 @@ def aggregate_ev_energy_demand(
                 access_energy = _value_by_time(it.get("access_energy_kwh", 0.0), t, 0.0)
                 if access_energy <= 0.0:
                     continue
-                dep_station = it.get("dep_station")
-                if dep_station is None:
-                    continue
-                energy.setdefault(dep_station, {tt: 0.0 for tt in times})
-                energy[dep_station][t] += access_energy * float(time_map.get(t, 0.0))
+                allocated = False
+                access_station_ids = _access_station_ids(it, t)
+                if access_station_ids:
+                    share = access_energy / max(1, len(access_station_ids))
+                    for sid in access_station_ids:
+                        energy.setdefault(sid, {tt: 0.0 for tt in times})
+                        energy[sid][t] += share * float(time_map.get(t, 0.0))
+                    allocated = True
+                if not allocated:
+                    dep_station = it.get("dep_station")
+                    if dep_station is None:
+                        continue
+                    energy.setdefault(dep_station, {tt: 0.0 for tt in times})
+                    energy[dep_station][t] += access_energy * float(time_map.get(t, 0.0))
     return energy
 
 
