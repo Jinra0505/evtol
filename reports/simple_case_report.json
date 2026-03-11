@@ -1,0 +1,172 @@
+{
+  "meta": {
+    "timestamp": "2026-03-11T03:54:04.202890Z",
+    "git_commit_if_available": "8db88b9",
+    "python_version": "3.10.19 (main, Jan 12 2026, 17:41:56) [GCC 13.3.0]",
+    "platform": "Linux-6.12.47-x86_64-with-glibc2.39",
+    "module_paths": {
+      "runner_file": "/workspace/evtol/project/src/runner.py",
+      "charging_file": "/workspace/evtol/project/src/charging.py",
+      "sys_path_head": [
+        "/workspace/evtol",
+        "/root/.pyenv/versions/3.10.19/lib/python310.zip",
+        "/root/.pyenv/versions/3.10.19/lib/python3.10",
+        "/root/.pyenv/versions/3.10.19/lib/python3.10/lib-dynload",
+        "/root/.pyenv/versions/3.10.19/lib/python3.10/site-packages"
+      ]
+    }
+  },
+  "config_used": {
+    "max_iter": 120,
+    "min_iters": 5,
+    "patience": 4,
+    "tol": 5.0,
+    "eps_improve": 1e-06,
+    "surcharge_msa_alpha": 0.2,
+    "surcharge_kappa": 0.8,
+    "surcharge_beta": 2.0,
+    "representative_od": "A-B",
+    "use_generator": false,
+    "K_paths": 2,
+    "vt_reliability_gamma": 0.2,
+    "ev_reliability_gamma": 0.1,
+    "shadow_price_cap_mult": 120.0,
+    "shadow_price_cap_abs": 200.0,
+    "strict_audit": false,
+    "audit_raise": false,
+    "max_total_iter": 120,
+    "surcharge_method": "shadow_lp",
+    "shadow_price_scale": 1.0,
+    "vt_reliability_floor": 0.05,
+    "vt_reliability_alpha": null,
+    "vt_reliability_skip_below": 0.0,
+    "max_iter_auto_extend": 0,
+    "auto_extend_step": 100,
+    "ev_reliability_floor": 0.05,
+    "shared_power_solver": "highs",
+    "output_full_json": true,
+    "power_violation_mode": "net",
+    "voll_ev_per_kwh": 50.0,
+    "voll_vt_per_kwh": 200.0
+  },
+  "equilibrium": {
+    "C1": 0.0,
+    "C2": 116.41227391191188,
+    "C2_rel": 2.1723682344825006,
+    "C2_raw": 0.0,
+    "C7": 0.0,
+    "C8": 0.0,
+    "C9": 0.10053913475383247,
+    "C10": 116.19447834520096,
+    "C10_raw": 0.0,
+    "C11": 0.0
+  },
+  "surcharge_power": {
+    "s1": {
+      "1": 4.032083523660532,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0
+    },
+    "s2": {
+      "1": 11.740154837671785,
+      "2": 6.04935146455602e-05,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0
+    },
+    "s3": {
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0
+    }
+  },
+  "surcharge_power_uncapped": {
+    "s1": {
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0
+    },
+    "s2": {
+      "1": 49.77,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0
+    },
+    "s3": {
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0
+    }
+  },
+  "diagnostics": {
+    "stop_reason": "patience",
+    "iter_count": 27,
+    "dx_end": 0.7111157003668825,
+    "dn_end": 3.2230771888378626,
+    "dprice_end": 3.9649612905820533,
+    "max_surcharge": 11.740154837671785,
+    "peak_t": 5,
+    "peak_prices": {
+      "s1": {
+        "base_price": 0.26,
+        "surcharge": 0.0,
+        "effective_price": 0.26
+      },
+      "s2": {
+        "base_price": 0.23,
+        "surcharge": 0.0,
+        "effective_price": 0.23
+      },
+      "s3": {
+        "base_price": 0.21,
+        "surcharge": 0.0,
+        "effective_price": 0.21
+      }
+    },
+    "cbd_tau": {
+      "cbd": {
+        "1": 4.0424999999999995,
+        "2": 5.757831892539286,
+        "3": 5.757831892539286,
+        "4": 5.757831892539286,
+        "5": 5.757831892539286,
+        "6": 5.757831892539286
+      }
+    },
+    "shared_power_solver_used": "highs",
+    "delta_t": 1.0,
+    "surcharge_kappa": 1.0,
+    "surcharge_cap_mult": 120.0,
+    "VOLL_EV": 50.0,
+    "VOLL_VT": 200.0,
+    "vt_reliability_gamma": 0.2
+  },
+  "SelfAudit": {
+    "ok": true,
+    "warnings": [
+      "C2 is smoothed mismatch; check C2_rel and dx_end for convergence",
+      "aircraft rerouting ignored feasible VT-related alternatives",
+      "price cap binding detected; report capped and uncapped surcharge in analysis",
+      "ratio_req high but mu_kw ~ 0 at s1,3",
+      "vertiport cap rerouting ignored feasible VT-related alternatives"
+    ],
+    "severe": [],
+    "cap_binding": true,
+    "has_negative_n": false
+  }
+}

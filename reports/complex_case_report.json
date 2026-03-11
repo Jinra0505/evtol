@@ -1,0 +1,297 @@
+{
+  "meta": {
+    "timestamp": "2026-03-11T03:53:41.884911Z",
+    "git_commit_if_available": "8db88b9",
+    "python_version": "3.10.19 (main, Jan 12 2026, 17:41:56) [GCC 13.3.0]",
+    "platform": "Linux-6.12.47-x86_64-with-glibc2.39",
+    "module_paths": {
+      "runner_file": "/workspace/evtol/project/src/runner.py",
+      "charging_file": "/workspace/evtol/project/src/charging.py",
+      "sys_path_head": [
+        "/workspace/evtol",
+        "/root/.pyenv/versions/3.10.19/lib/python310.zip",
+        "/root/.pyenv/versions/3.10.19/lib/python3.10",
+        "/root/.pyenv/versions/3.10.19/lib/python3.10/lib-dynload",
+        "/root/.pyenv/versions/3.10.19/lib/python3.10/site-packages"
+      ]
+    }
+  },
+  "config_used": {
+    "max_iter": 160,
+    "min_iters": 6,
+    "patience": 5,
+    "tol": 6.0,
+    "eps_improve": 1e-06,
+    "surcharge_msa_alpha": 0.2,
+    "surcharge_kappa": 0.9,
+    "surcharge_beta": 2.2,
+    "representative_od": "A-B",
+    "use_generator": false,
+    "K_paths": 3,
+    "vt_reliability_gamma": 0.25,
+    "ev_reliability_gamma": 0.12,
+    "shadow_price_cap_mult": 200.0,
+    "shadow_price_cap_abs": 300.0,
+    "strict_audit": false,
+    "audit_raise": false,
+    "max_total_iter": 240,
+    "surcharge_method": "shadow_lp",
+    "shadow_price_scale": 1.0,
+    "vt_reliability_floor": 0.05,
+    "vt_reliability_alpha": null,
+    "vt_reliability_skip_below": 0.0,
+    "max_iter_auto_extend": 0,
+    "auto_extend_step": 100,
+    "ev_reliability_floor": 0.05,
+    "shared_power_solver": "highs",
+    "output_full_json": true,
+    "power_violation_mode": "net",
+    "voll_ev_per_kwh": 50.0,
+    "voll_vt_per_kwh": 200.0
+  },
+  "equilibrium": {
+    "C1": 0.0,
+    "C2": 75.13167959550447,
+    "C2_rel": 0.40889049962946306,
+    "C2_raw": 0.0,
+    "C7": 0.0,
+    "C8": 0.0,
+    "C9": 0.0,
+    "C10": 46.41292713956405,
+    "C10_raw": 0.0,
+    "C11": 0.0
+  },
+  "surcharge_power": {
+    "s1": {
+      "1": 43.96513960849374,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    },
+    "s2": {
+      "1": 43.96513960849374,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    },
+    "s3": {
+      "1": 22.197064529646084,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    },
+    "s4": {
+      "1": 22.197064529646084,
+      "2": 4.951760157141528e-06,
+      "3": 4.951760157141528e-06,
+      "4": 4.951760157141528e-06,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    },
+    "s5": {
+      "1": 22.207703076858692,
+      "2": 4.951760157141528e-06,
+      "3": 4.951760157141528e-06,
+      "4": 4.951760157141528e-06,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    },
+    "s6": {
+      "1": 22.207703076858692,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    }
+  },
+  "surcharge_power_uncapped": {
+    "s1": {
+      "1": 49.78,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    },
+    "s2": {
+      "1": 49.78,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    },
+    "s3": {
+      "1": 49.8,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    },
+    "s4": {
+      "1": 49.8,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    },
+    "s5": {
+      "1": 49.8,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    },
+    "s6": {
+      "1": 49.8,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "6": 0.0,
+      "7": 0.0,
+      "8": 0.0,
+      "9": 0.0,
+      "10": 0.0,
+      "11": 0.0,
+      "12": 0.0
+    }
+  },
+  "diagnostics": {
+    "stop_reason": "patience",
+    "iter_count": 32,
+    "dx_end": 0.299583619775667,
+    "dn_end": 4.5586731132036675,
+    "dprice_end": 4.450733867588482,
+    "max_surcharge": 43.96513960849374,
+    "peak_t": 5,
+    "peak_prices": {
+      "s1": {
+        "base_price": 0.255,
+        "surcharge": 0.0,
+        "effective_price": 0.255
+      },
+      "s2": {
+        "base_price": 0.255,
+        "surcharge": 0.0,
+        "effective_price": 0.255
+      },
+      "s3": {
+        "base_price": 0.225,
+        "surcharge": 0.0,
+        "effective_price": 0.225
+      }
+    },
+    "cbd_tau": {
+      "cbd1": {
+        "1": 3.624075,
+        "2": 6.318000000000001,
+        "3": 6.318000000000001,
+        "4": 6.318000000000001,
+        "5": 6.318000000000001,
+        "6": 6.318000000000001,
+        "7": 6.318000000000001,
+        "8": 6.318000000000001,
+        "9": 6.318000000000001,
+        "10": 6.318000000000001,
+        "11": 6.318000000000001,
+        "12": 6.318000000000001
+      }
+    },
+    "shared_power_solver_used": "highs",
+    "delta_t": 1.0,
+    "surcharge_kappa": 1.0,
+    "surcharge_cap_mult": 200.0,
+    "VOLL_EV": 50.0,
+    "VOLL_VT": 200.0,
+    "vt_reliability_gamma": 0.25
+  },
+  "SelfAudit": {
+    "ok": true,
+    "warnings": [
+      "C2 is smoothed mismatch; check C2_rel and dx_end for convergence",
+      "aircraft rerouting ignored feasible VT-related alternatives",
+      "price cap binding detected; report capped and uncapped surcharge in analysis",
+      "vertiport cap rerouting ignored feasible VT-related alternatives"
+    ],
+    "severe": [],
+    "cap_binding": true,
+    "has_negative_n": false
+  }
+}

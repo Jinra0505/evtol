@@ -1,0 +1,14 @@
+{
+  "stop_reason": "patience",
+  "iter_count_total": 27,
+  "dx_end": 0.7111157003668825,
+  "dn_end": 3.2230771888378626,
+  "dprice_end": 3.9649612905820533,
+  "unserved_demand_total": 0,
+  "vertiport_cap_triggered_count": 5.0,
+  "aircraft_binding_count": 10.0,
+  "SelfAudit_ok": true,
+  "SelfAudit_severe": [],
+  "mode_share_by_group_and_supermode_len": 27,
+  "mode_share_by_group_and_mode_len": 27
+}
