@@ -210,9 +210,13 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
         dx_bad = dx_end is not None and float(dx_end) > tol
         dn_bad = dn_end is not None and float(dn_end) > tol
         dprice_bad = dprice_end is not None and float(dprice_end) > tol
-        if dx_bad or dn_bad or dprice_bad:
-            c2_rel = float(results.get("residuals", {}).get("C2_rel", 0.0) or 0.0)
-            if bool(config.get("strict_convergence", False)) and c2_rel > max(0.15, 0.5 * tol):
+        c2_rel = float(results.get("residuals", {}).get("C2_rel", 0.0) or 0.0)
+        c10 = float(results.get("residuals", {}).get("C10", 0.0) or 0.0)
+        c7 = float(results.get("residuals", {}).get("C7", 0.0) or 0.0)
+        strict_fail = (c2_rel > max(0.25, 0.35 * tol)) or (c10 > max(35.0, 8.0 * tol)) or (c7 > max(18.0, 6.0 * tol))
+        any_fail = dx_bad or dn_bad or dprice_bad or strict_fail
+        if any_fail:
+            if bool(config.get("strict_convergence", False)) and strict_fail:
                 severe.append("convergence thresholds not satisfied")
             else:
                 warnings.append("convergence thresholds not satisfied")
@@ -356,11 +360,12 @@ def _reroute_excess_with_conditional_logit(
     min_vt_reroute_share: float = 0.0,
 ) -> Dict[str, float]:
     if excess_pax <= 0.0:
-        return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": 0.0, "feasible_vt_alts": 0.0, "feasible_total_alts": 0.0}
+        return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": 0.0, "feasible_vt_alts": 0.0, "feasible_total_alts": 0.0, "feasible_multimodal_alts": 0.0}
 
     alts = itineraries_by_od.get(od_key, [])
     feasible: List[Tuple[Dict[str, Any], float]] = []
     feasible_vt_alts = 0.0
+    feasible_multimodal_alts = 0.0
     for it in alts:
         dep = it.get("dep_station")
         if blocked_dep_station is not None and is_evtol_itinerary(it) and dep == blocked_dep_station:
@@ -373,17 +378,19 @@ def _reroute_excess_with_conditional_logit(
         feasible.append((it, util))
         if is_evtol_itinerary(it):
             feasible_vt_alts += 1.0
+        if is_multimodal_evtol(it):
+            feasible_multimodal_alts += 1.0
 
     if not feasible:
         unserved_demand.setdefault(od_key, {}).setdefault(group, {})[t] = unserved_demand.setdefault(od_key, {}).setdefault(group, {}).get(t, 0.0) + excess_pax
-        return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": excess_pax, "feasible_vt_alts": feasible_vt_alts, "feasible_total_alts": 0.0}
+        return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": excess_pax, "feasible_vt_alts": feasible_vt_alts, "feasible_total_alts": 0.0, "feasible_multimodal_alts": 0.0}
 
     max_u = max(u for _, u in feasible)
     weights = [math.exp(u - max_u) for _, u in feasible]
     den = sum(weights)
     if den <= 0.0:
         unserved_demand.setdefault(od_key, {}).setdefault(group, {})[t] = unserved_demand.setdefault(od_key, {}).setdefault(group, {}).get(t, 0.0) + excess_pax
-        return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": excess_pax, "feasible_vt_alts": feasible_vt_alts, "feasible_total_alts": 0.0}
+        return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": excess_pax, "feasible_vt_alts": feasible_vt_alts, "feasible_total_alts": 0.0, "feasible_multimodal_alts": 0.0}
 
     probs = [w / den for w in weights]
     vt_idx = [i for i, (it, _) in enumerate(feasible) if is_evtol_itinerary(it)]
@@ -415,7 +422,7 @@ def _reroute_excess_with_conditional_logit(
             to_evtol += add
         else:
             to_ev += add
-    return {"to_evtol": to_evtol, "to_multimodal": to_multimodal, "to_ev": to_ev, "unserved": 0.0, "feasible_vt_alts": feasible_vt_alts, "feasible_total_alts": float(len(feasible))}
+    return {"to_evtol": to_evtol, "to_multimodal": to_multimodal, "to_ev": to_ev, "unserved": 0.0, "feasible_vt_alts": feasible_vt_alts, "feasible_total_alts": float(len(feasible)), "feasible_multimodal_alts": feasible_multimodal_alts}
 
 
 def _apply_vertiport_caps(
@@ -445,6 +452,7 @@ def _apply_vertiport_caps(
         "unserved": 0.0,
         "feasible_vt_but_all_ev_count": 0.0,
         "feasible_total_alts_count": 0.0,
+        "feasible_multimodal_alts_count": 0.0,
     }
 
     for dep, it_list in evtol_by_dep.items():
@@ -491,6 +499,7 @@ def _apply_vertiport_caps(
                 stats["rerouted_to_ev"] += rr["to_ev"]
                 stats["unserved"] += rr["unserved"]
                 stats["feasible_total_alts_count"] += rr.get("feasible_total_alts", 0.0)
+                stats["feasible_multimodal_alts_count"] += rr.get("feasible_multimodal_alts", 0.0)
                 moved = rr["to_evtol"] + rr["to_multimodal"] + rr["to_ev"]
                 ev_ratio = rr["to_ev"] / max(moved, 1.0e-12)
                 if rr["feasible_vt_alts"] > 0.0 and ev_ratio >= 0.98 and moved > 1.0e-9:
@@ -546,6 +555,7 @@ def _enforce_aircraft_inventory(
         "feasible_vt_but_all_ev_count": 0.0,
         "lag_oob_count": 0.0,
         "feasible_total_alts_count": 0.0,
+        "feasible_multimodal_alts_count": 0.0,
     }
 
     for t in times:
@@ -619,7 +629,10 @@ def _enforce_aircraft_inventory(
             stats["excess_rerouted_to_ev"] += rr["to_ev"]
             stats["unserved"] += rr["unserved"]
             stats["feasible_total_alts_count"] += rr.get("feasible_total_alts", 0.0)
-            if rr["feasible_vt_alts"] > 0.0 and rr["to_evtol"] + rr["to_multimodal"] <= 1.0e-9 and rr["to_ev"] > 1.0e-9:
+            stats["feasible_multimodal_alts_count"] += rr.get("feasible_multimodal_alts", 0.0)
+            moved = rr["to_evtol"] + rr["to_multimodal"] + rr["to_ev"]
+            ev_ratio = rr["to_ev"] / max(moved, 1.0e-12)
+            if rr["feasible_vt_alts"] > 0.0 and ev_ratio >= 0.98 and moved > 1.0e-9:
                 stats["feasible_vt_but_all_ev_count"] += 1.0
 
     return flows, {
@@ -634,6 +647,7 @@ def _enforce_aircraft_inventory(
         "aircraft_feasible_vt_but_all_ev_count": stats["feasible_vt_but_all_ev_count"],
         "aircraft_lag_oob_count": stats["lag_oob_count"],
         "aircraft_feasible_total_alts_count": stats["feasible_total_alts_count"],
+        "aircraft_feasible_multimodal_alts_count": stats["feasible_multimodal_alts_count"],
     }
 
 
@@ -945,6 +959,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             diagnostics["vertiport_cap_unserved"] = cap_stats.get("unserved", 0.0)
             diagnostics["vertiport_cap_feasible_vt_but_all_ev_count"] = cap_stats.get("feasible_vt_but_all_ev_count", 0.0)
             diagnostics["vertiport_cap_feasible_total_alts_count"] = cap_stats.get("feasible_total_alts_count", 0.0)
+            diagnostics["vertiport_cap_feasible_multimodal_alts_count"] = cap_stats.get("feasible_multimodal_alts_count", 0.0)
 
         vt_fast = float(data.get("parameters", {}).get("vt_pax_per_departure_fast", 2.0))
         vt_slow = float(data.get("parameters", {}).get("vt_pax_per_departure_slow", 4.0))
