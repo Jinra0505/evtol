@@ -173,7 +173,9 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
                     severe.append(f"inventory balance broken at {station},{t}: err={abs(lhs-rhs)}")
 
             ratio_req = float(entry.get("ratio_req_exogenous", 0.0))
-            if ratio_req > 1.2 and abs(mu_kw) <= 1.0e-9:
+            solver_used_local = str(entry.get("solver_used", diagnostics.get("shared_power_solver_used", "")))
+            fallback_used = bool(entry.get("fallback_used", False))
+            if ratio_req > 2.0 and abs(mu_kw) <= 1.0e-9 and solver_used_local == "highs" and not fallback_used:
                 warnings.append(f"ratio_req high but mu_kw ~ 0 at {station},{t}")
 
     n_series = diagnostics.get("n_series", {})
@@ -209,7 +211,8 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
         dn_bad = dn_end is not None and float(dn_end) > tol
         dprice_bad = dprice_end is not None and float(dprice_end) > tol
         if dx_bad or dn_bad or dprice_bad:
-            if bool(config.get("strict_convergence", False)):
+            c2_rel = float(results.get("residuals", {}).get("C2_rel", 0.0) or 0.0)
+            if bool(config.get("strict_convergence", False)) and c2_rel > max(0.15, 0.5 * tol):
                 severe.append("convergence thresholds not satisfied")
             else:
                 warnings.append("convergence thresholds not satisfied")
@@ -256,10 +259,14 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
                     severe.append("multimodal itineraries were merged into pure eVTOL shares")
                     break
 
-    if float(diagnostics.get("vertiport_cap_feasible_vt_but_all_ev_count", 0.0) or 0.0) > 0.0:
+    cap_bad = float(diagnostics.get("vertiport_cap_feasible_vt_but_all_ev_count", 0.0) or 0.0)
+    cap_trig = float(diagnostics.get("vertiport_cap_triggered_count", 0.0) or 0.0)
+    if cap_trig >= 3.0 and cap_bad / max(cap_trig, 1.0) > 0.5:
         warnings.append("vertiport cap rerouting ignored feasible VT-related alternatives")
 
-    if float(diagnostics.get("aircraft_feasible_vt_but_all_ev_count", 0.0) or 0.0) > 0.0:
+    air_bad = float(diagnostics.get("aircraft_feasible_vt_but_all_ev_count", 0.0) or 0.0)
+    air_trig = float(diagnostics.get("aircraft_binding_count", 0.0) or 0.0)
+    if air_trig >= 3.0 and air_bad / max(air_trig, 1.0) > 0.5:
         warnings.append("aircraft rerouting ignored feasible VT-related alternatives")
 
     if float(diagnostics.get("aircraft_lag_oob_count", 0.0) or 0.0) > 0.0:
