@@ -1,14 +1,119 @@
 {
   "stop_reason": "patience",
-  "iter_count_total": 27,
-  "dx_end": 0.7111157003668825,
-  "dn_end": 3.2230771888378626,
-  "dprice_end": 3.9649612905820533,
+  "iter_count_total": 35,
+  "dx_end": 0.6949314437244656,
+  "dn_end": 4.637962695083161,
+  "dprice_end": 2.787635289706383,
   "unserved_demand_total": 0,
-  "vertiport_cap_triggered_count": 5.0,
+  "SelfAudit": {
+    "ok": true,
+    "severe": []
+  },
+  "vertiport_cap_triggered_count": 10.0,
   "aircraft_binding_count": 10.0,
-  "SelfAudit_ok": true,
-  "SelfAudit_severe": [],
-  "mode_share_by_group_and_supermode_len": 27,
-  "mode_share_by_group_and_mode_len": 27
+  "rerouted_to_evtol": 874.6592975893618,
+  "rerouted_to_multimodal": 114.25773308977205,
+  "rerouted_to_ev": 789.3078276704988,
+  "peak_t": 5,
+  "peak_prices": {
+    "s1": {
+      "base_price": 0.26,
+      "surcharge": 15.899289529264557,
+      "effective_price": 16.15928952926456
+    },
+    "s2": {
+      "base_price": 0.23,
+      "surcharge": 3.8820834142545304,
+      "effective_price": 4.11208341425453
+    },
+    "s3": {
+      "base_price": 0.21,
+      "surcharge": 18.425398225736917,
+      "effective_price": 18.635398225736918
+    }
+  },
+  "representative_od_mode_share_supermode": {
+    "iteration": 35,
+    "od": "B-C",
+    "t": 5,
+    "shares": {
+      "high": {
+        "EV": 0.0,
+        "eVTOL": 0.6166605742688863,
+        "EV_to_eVTOL": 0.38333942573111374
+      },
+      "k1": {
+        "EV": 9.822038408677395e-08,
+        "eVTOL": 0.6166605137002478,
+        "EV_to_eVTOL": 0.3833393880793681
+      },
+      "low": {
+        "EV": 0.6534557350589862,
+        "eVTOL": 0.21370018507480495,
+        "EV_to_eVTOL": 0.1328440798662089
+      },
+      "mid": {
+        "EV": 8.412852767177065e-06,
+        "eVTOL": 0.6166553863942676,
+        "EV_to_eVTOL": 0.38333620075296526
+      }
+    }
+  },
+  "representative_od_mode_share_mode": {
+    "iteration": 35,
+    "od": "B-C",
+    "t": 5,
+    "shares": {
+      "high": {
+        "pure_EV": 0.0,
+        "pure_eVTOL_fast": 0.0,
+        "pure_eVTOL_slow": 0.6166605742688863,
+        "multimodal_EV_to_eVTOL_fast": 0.38333942573111374,
+        "multimodal_EV_to_eVTOL_slow": 0.0
+      },
+      "k1": {
+        "pure_EV": 9.822038408677395e-08,
+        "pure_eVTOL_fast": 0.0,
+        "pure_eVTOL_slow": 0.6166605137002478,
+        "multimodal_EV_to_eVTOL_fast": 0.3833393880793681,
+        "multimodal_EV_to_eVTOL_slow": 0.0
+      },
+      "low": {
+        "pure_EV": 0.6534557350589861,
+        "pure_eVTOL_fast": 0.0,
+        "pure_eVTOL_slow": 0.21370018507480493,
+        "multimodal_EV_to_eVTOL_fast": 0.13284407981626065,
+        "multimodal_EV_to_eVTOL_slow": 4.9948198495815484e-11
+      },
+      "mid": {
+        "pure_EV": 8.412852767177065e-06,
+        "pure_eVTOL_fast": 0.0,
+        "pure_eVTOL_slow": 0.6166553863942676,
+        "multimodal_EV_to_eVTOL_fast": 0.38333620075296526,
+        "multimodal_EV_to_eVTOL_slow": 0.0
+      }
+    }
+  },
+  "group_supermode_share_summary": {
+    "high": {
+      "EV": 0.0,
+      "eVTOL": 0.6166605742688863,
+      "EV_to_eVTOL": 0.38333942573111374
+    },
+    "k1": {
+      "EV": 9.822038408677395e-08,
+      "eVTOL": 0.6166605137002478,
+      "EV_to_eVTOL": 0.3833393880793681
+    },
+    "low": {
+      "EV": 0.6534557350589862,
+      "eVTOL": 0.21370018507480495,
+      "EV_to_eVTOL": 0.1328440798662089
+    },
+    "mid": {
+      "EV": 8.412852767177065e-06,
+      "eVTOL": 0.6166553863942676,
+      "EV_to_eVTOL": 0.38333620075296526
+    }
+  }
 }
