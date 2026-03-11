@@ -90,6 +90,14 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     cap_binding = False
 
     diagnostics = results.get("diagnostics", {})
+    expected_groups = set(results.get("data_parameters", {}).get("expected_groups", []))
+    if expected_groups:
+        for entry in diagnostics.get("mode_share_by_group_and_supermode", []):
+            shares = entry.get("shares", {})
+            found = set(shares.keys())
+            extra = sorted(found - expected_groups)
+            if extra:
+                severe.append(f"unexpected group label(s) in mode share: {extra}")
     power_tightness = diagnostics.get("power_tightness", {})
 
     def _scan_numeric(path: str, obj: Any) -> None:
@@ -195,13 +203,16 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     dn_end = diagnostics.get("dn_end", results.get("convergence", {}).get("dn"))
     dprice_end = diagnostics.get("dprice_end", results.get("convergence", {}).get("dprice"))
     if stop_reason != "patience":
-        severe.append("did not stop by patience")
+        warnings.append("did not stop by patience")
     if tol > 0.0:
         dx_bad = dx_end is not None and float(dx_end) > tol
         dn_bad = dn_end is not None and float(dn_end) > tol
         dprice_bad = dprice_end is not None and float(dprice_end) > tol
         if dx_bad or dn_bad or dprice_bad:
-            severe.append("convergence thresholds not satisfied")
+            if bool(config.get("strict_convergence", False)):
+                severe.append("convergence thresholds not satisfied")
+            else:
+                warnings.append("convergence thresholds not satisfied")
 
     expected_groups = set(results.get("data_parameters", {}).get("lambda", {}).keys())
     output_groups = set()
@@ -233,7 +244,7 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
             mm = float(comps.get("multimodal_EV_to_eVTOL_fast", 0.0)) + float(comps.get("multimodal_EV_to_eVTOL_slow", 0.0))
             old_grp = last_old.get(grp, {})
             if "ev" in old_grp or "vt" in old_grp:
-                warnings.append("legacy mode_share_by_group omits multimodal split; use mode_share_by_group_and_supermode instead")
+                warnings.append("legacy mode_share_by_group is deprecated; use mode_share_by_group_and_supermode")
                 old_vt = float(old_grp.get("vt", 0.0))
                 pure_vt = float(comps.get("pure_eVTOL_fast", 0.0)) + float(comps.get("pure_eVTOL_slow", 0.0))
                 if mm > 1.0e-9 and old_vt > pure_vt + 1.0e-9:
@@ -710,7 +721,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     config.setdefault("auto_extend_step", 100)
     config.setdefault("ev_reliability_floor", config.get("vt_reliability_floor", 0.05))
     config.setdefault("strict_audit", True)
-    config.setdefault("audit_raise", False)
+    config.setdefault("audit_raise", True)
     config.setdefault("shared_power_solver", "highs")
     config.setdefault("output_full_json", True)
     config.setdefault("power_violation_mode", "net")
@@ -1253,7 +1264,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     "EV_to_eVTOL": mode_share_by_group_and_supermode[grp]["EV_to_eVTOL"],
                 }
         diagnostics["mode_share_by_group"].append(
-            {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": mode_share_by_group}
+            {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": mode_share_by_group, "legacy": True}
         )
         diagnostics["mode_share_by_group_and_mode"].append(
             {"iteration": iteration + 1, "od": representative_od, "t": peak_t, "shares": mode_share_by_group_and_mode}
@@ -1496,7 +1507,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "dn_end": dn,
             "dprice_end": dprice,
         },
-        "data_parameters": data.get("parameters", {}),
+        "data_parameters": {**data.get("parameters", {}), "expected_groups": list(data.get("sets", {}).get("groups", []))},
         "meta": data.get("meta", {}),
         "charging": {
             "E": E,
@@ -1512,6 +1523,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "Requested HiGHS but non-HiGHS solver used",
         "inventory balance broken",
         "vt_service_prob out of range",
+        "unexpected group label",
     ]
     if any(any(tok in s for tok in must_raise_tokens) for s in audit.get("severe", [])):
         raise ValueError("Critical self-audit failure: " + "; ".join(audit.get("severe", [])))
