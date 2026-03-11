@@ -1,0 +1,162 @@
+{
+  "stop_reason": "patience",
+  "iter_count_total": 35,
+  "dx_end": 0.35552275144454404,
+  "dn_end": 1.155622456093738,
+  "dprice_end": 1.8315862013099995,
+  "unserved_demand_total": 0,
+  "SelfAudit": {
+    "ok": true,
+    "severe": [],
+    "warnings": [
+      "C2 is smoothed mismatch; check C2_rel and dx_end for convergence",
+      "aircraft rerouting ignored feasible VT-related alternatives",
+      "vertiport cap rerouting ignored feasible VT-related alternatives"
+    ]
+  },
+  "vertiport_cap_triggered_count": 6.0,
+  "aircraft_binding_count": 7.0,
+  "rerouted_to_evtol": 6.085973127793265,
+  "rerouted_to_multimodal": 17.680998646481537,
+  "rerouted_to_ev": 466.90666857908974,
+  "rerouted_unserved": 0.0,
+  "peak_t": 5,
+  "peak_prices": {
+    "s1": {
+      "base_price": 0.24,
+      "surcharge": 0.4578564646661124,
+      "effective_price": 0.6978564646661124
+    },
+    "s2": {
+      "base_price": 0.22,
+      "surcharge": 0.0,
+      "effective_price": 0.22
+    },
+    "s3": {
+      "base_price": 0.2,
+      "surcharge": 0.42616526580870173,
+      "effective_price": 0.6261652658087018
+    }
+  },
+  "representative_od_summary": {
+    "od": "B-C",
+    "mode_share_by_group_and_supermode": {
+      "iteration": 35,
+      "od": "B-C",
+      "t": 5,
+      "shares": {
+        "high": {
+          "EV": 0.8302033512855602,
+          "eVTOL": 0.0,
+          "EV_to_eVTOL": 0.16979664871443986
+        },
+        "low": {
+          "EV": 0.6438976940328858,
+          "eVTOL": 0.0023292217418864917,
+          "EV_to_eVTOL": 0.3537730842252277
+        },
+        "mid": {
+          "EV": 0.779257840769916,
+          "eVTOL": 0.0,
+          "EV_to_eVTOL": 0.220742159230084
+        }
+      }
+    },
+    "mode_share_by_group_and_mode": {
+      "iteration": 35,
+      "od": "B-C",
+      "t": 5,
+      "shares": {
+        "high": {
+          "pure_EV": 0.8302033512855602,
+          "pure_eVTOL_fast": 0.0,
+          "pure_eVTOL_slow": 0.0,
+          "multimodal_EV_to_eVTOL_fast": 0.169794816626379,
+          "multimodal_EV_to_eVTOL_slow": 1.8320880608668807e-06
+        },
+        "low": {
+          "pure_EV": 0.6438976940328858,
+          "pure_eVTOL_fast": 0.0022904304046494997,
+          "pure_eVTOL_slow": 3.879133723699228e-05,
+          "multimodal_EV_to_eVTOL_fast": 0.12234737612410357,
+          "multimodal_EV_to_eVTOL_slow": 0.23142570810112412
+        },
+        "mid": {
+          "pure_EV": 0.7792578407699161,
+          "pure_eVTOL_fast": 0.0,
+          "pure_eVTOL_slow": 0.0,
+          "multimodal_EV_to_eVTOL_fast": 0.16979479850264673,
+          "multimodal_EV_to_eVTOL_slow": 0.050947360727437316
+        }
+      }
+    }
+  },
+  "mode_share_by_group_and_supermode": {
+    "iteration": 35,
+    "od": "B-C",
+    "t": 5,
+    "shares": {
+      "high": {
+        "EV": 0.8302033512855602,
+        "eVTOL": 0.0,
+        "EV_to_eVTOL": 0.16979664871443986
+      },
+      "low": {
+        "EV": 0.6438976940328858,
+        "eVTOL": 0.0023292217418864917,
+        "EV_to_eVTOL": 0.3537730842252277
+      },
+      "mid": {
+        "EV": 0.779257840769916,
+        "eVTOL": 0.0,
+        "EV_to_eVTOL": 0.220742159230084
+      }
+    }
+  },
+  "mode_share_by_group_and_mode": {
+    "iteration": 35,
+    "od": "B-C",
+    "t": 5,
+    "shares": {
+      "high": {
+        "pure_EV": 0.8302033512855602,
+        "pure_eVTOL_fast": 0.0,
+        "pure_eVTOL_slow": 0.0,
+        "multimodal_EV_to_eVTOL_fast": 0.169794816626379,
+        "multimodal_EV_to_eVTOL_slow": 1.8320880608668807e-06
+      },
+      "low": {
+        "pure_EV": 0.6438976940328858,
+        "pure_eVTOL_fast": 0.0022904304046494997,
+        "pure_eVTOL_slow": 3.879133723699228e-05,
+        "multimodal_EV_to_eVTOL_fast": 0.12234737612410357,
+        "multimodal_EV_to_eVTOL_slow": 0.23142570810112412
+      },
+      "mid": {
+        "pure_EV": 0.7792578407699161,
+        "pure_eVTOL_fast": 0.0,
+        "pure_eVTOL_slow": 0.0,
+        "multimodal_EV_to_eVTOL_fast": 0.16979479850264673,
+        "multimodal_EV_to_eVTOL_slow": 0.050947360727437316
+      }
+    }
+  },
+  "pure_evtol_service_class_share": {
+    "iteration": 35,
+    "od": "B-C",
+    "t": 5,
+    "shares": {
+      "fast": 0.9833457946319984,
+      "slow": 0.0166542053680016
+    }
+  },
+  "all_evtol_service_class_share": {
+    "iteration": 35,
+    "od": "B-C",
+    "t": 5,
+    "shares": {
+      "fast": 0.5458190666187342,
+      "slow": 0.4541809333812657
+    }
+  }
+}
