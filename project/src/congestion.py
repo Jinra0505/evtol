@@ -94,15 +94,24 @@ def compute_vt_departure_waits(
             cap_total = _safe_den(cap_total)
             cap_fast = vt_caps_fast.get(s, {}).get(t)
             if cap_fast is None:
-                cap_fast = 0.4 * cap_total
-            cap_fast = _safe_den(cap_fast)
+                cap_fast = 0.35 * cap_total
+            cap_fast = min(_safe_den(cap_fast), cap_total)
+            cap_slow = _safe_den(max(cap_total - cap_fast, 1.0e-6))
 
-            w_fast = max(0.0, w0_fast + a_fast * (q_fast / cap_fast) ** g_fast)
-            w_slow = max(0.0, w0_slow + a_slow * ((q_fast + q_slow) / cap_total) ** g_slow)
+            # Priority-lane approximation: fast queue uses its own reserved capacity and does not
+            # fully inherit slow-class congestion; slow queue receives spillover from fast overflow.
+            q_fast_over = max(0.0, q_fast - cap_fast)
+            q_slow_eff = q_slow + 0.5 * q_fast_over
+
+            w_fast = max(0.0, w0_fast + a_fast * (q_fast / max(cap_fast, 1.0e-6)) ** g_fast)
+            w_slow = max(0.0, w0_slow + a_slow * (q_slow_eff / cap_slow) ** g_slow)
             if math.isnan(w_fast) or math.isinf(w_fast):
                 w_fast = 0.0
             if math.isnan(w_slow) or math.isinf(w_slow):
                 w_slow = 0.0
+            # In normal service design fast should not systematically exceed slow.
+            if w_fast > w_slow:
+                w_fast = max(w0_fast, 0.95 * w_slow)
             waits[s]["fast"][t] = float(w_fast)
             waits[s]["slow"][t] = float(w_slow)
 
