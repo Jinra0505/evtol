@@ -1,0 +1,36 @@
+{
+  "meta": {
+    "timestamp": "2026-03-11T16:34:37.718698Z",
+    "git_commit_if_available": null,
+    "python_version": "3.10.19 (main, Jan 12 2026, 17:41:56) [GCC 13.3.0]",
+    "platform": "Linux-6.12.47-x86_64-with-glibc2.39"
+  },
+  "config_used": {},
+  "equilibrium": {},
+  "surcharge_power": {},
+  "surcharge_power_uncapped": {},
+  "diagnostics": {
+    "module_paths": {
+      "runner_file": "/workspace/evtol/project/src/runner.py",
+      "charging_file": "/workspace/evtol/project/src/charging.py",
+      "sys_path_head": [
+        "/workspace/evtol",
+        "/root/.pyenv/versions/3.10.19/lib/python310.zip",
+        "/root/.pyenv/versions/3.10.19/lib/python3.10",
+        "/root/.pyenv/versions/3.10.19/lib/python3.10/lib-dynload",
+        "/root/.pyenv/versions/3.10.19/lib/python3.10/site-packages"
+      ]
+    },
+    "scipy_version": "1.15.3",
+    "scipy_ok": true
+  },
+  "SelfAudit": {
+    "ok": false,
+    "warnings": [],
+    "severe": [
+      "ValueError('SelfAudit severe issues: convergence thresholds not satisfied')"
+    ],
+    "cap_binding": false,
+    "has_negative_n": false
+  }
+}
