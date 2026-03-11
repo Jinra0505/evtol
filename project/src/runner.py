@@ -245,6 +245,26 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
                     severe.append("multimodal itineraries were merged into pure eVTOL shares")
                     break
 
+    if float(diagnostics.get("vertiport_cap_feasible_vt_but_all_ev_count", 0.0) or 0.0) > 0.0:
+        warnings.append("vertiport cap rerouting ignored feasible VT-related alternatives")
+
+    if float(diagnostics.get("aircraft_feasible_vt_but_all_ev_count", 0.0) or 0.0) > 0.0:
+        warnings.append("aircraft rerouting ignored feasible VT-related alternatives")
+
+    if float(diagnostics.get("aircraft_lag_oob_count", 0.0) or 0.0) > 0.0:
+        severe.append("aircraft return lag index out of bounds")
+
+    inv = diagnostics.get("aircraft_inventory_by_station", {})
+    dep = diagnostics.get("aircraft_departures_by_station", {})
+    for s, tmap in inv.items():
+        for t, a in tmap.items():
+            a = float(a)
+            d = float(dep.get(s, {}).get(t, 0.0))
+            if a < -1.0e-9:
+                severe.append("aircraft inventory negative")
+            if d > a + 1.0e-9:
+                severe.append("aircraft departures exceed available inventory")
+
     vt_waits = diagnostics.get("vt_departure_waits", {})
     fast_gt_slow = 0
     fast_cmp_total = 0
@@ -291,12 +311,84 @@ def _fill_missing(mapping: Dict[str, Dict[int, float]], keys: List[str], times: 
     return mapping
 
 
+def _build_itinerary_index(itineraries: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {it["id"]: it for it in itineraries}
+
+
+def _utility_for_alt(
+    utilities: Dict[str, Dict[str, Dict[int, float]]],
+    it_id: str,
+    group: str,
+    t: int,
+) -> float:
+    return float(utilities.get(it_id, {}).get(group, {}).get(t, -float("inf")))
+
+
+def _reroute_excess_with_conditional_logit(
+    *,
+    flows: Dict[str, Dict[str, Dict[int, float]]],
+    itineraries_by_od: Dict[str, List[Dict[str, Any]]],
+    utilities: Dict[str, Dict[str, Dict[int, float]]],
+    od_key: str,
+    group: str,
+    t: int,
+    excess_pax: float,
+    blocked_dep_station: str | None,
+    unserved_demand: Dict[str, Dict[str, Dict[int, float]]],
+) -> Dict[str, float]:
+    if excess_pax <= 0.0:
+        return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": 0.0, "feasible_vt_alts": 0.0}
+
+    alts = itineraries_by_od.get(od_key, [])
+    feasible: List[Tuple[Dict[str, Any], float]] = []
+    feasible_vt_alts = 0.0
+    for it in alts:
+        dep = it.get("dep_station")
+        if blocked_dep_station is not None and is_evtol_itinerary(it) and dep == blocked_dep_station:
+            continue
+        util = _utility_for_alt(utilities, it["id"], group, t)
+        if math.isinf(util) and util < 0:
+            continue
+        if math.isnan(util):
+            continue
+        feasible.append((it, util))
+        if is_evtol_itinerary(it):
+            feasible_vt_alts += 1.0
+
+    if not feasible:
+        unserved_demand.setdefault(od_key, {}).setdefault(group, {})[t] = unserved_demand.setdefault(od_key, {}).setdefault(group, {}).get(t, 0.0) + excess_pax
+        return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": excess_pax, "feasible_vt_alts": feasible_vt_alts}
+
+    max_u = max(u for _, u in feasible)
+    weights = [math.exp(u - max_u) for _, u in feasible]
+    den = sum(weights)
+    if den <= 0.0:
+        unserved_demand.setdefault(od_key, {}).setdefault(group, {})[t] = unserved_demand.setdefault(od_key, {}).setdefault(group, {}).get(t, 0.0) + excess_pax
+        return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": excess_pax, "feasible_vt_alts": feasible_vt_alts}
+
+    to_evtol = 0.0
+    to_multimodal = 0.0
+    to_ev = 0.0
+    for (it, _), w in zip(feasible, weights):
+        add = excess_pax * (w / den)
+        flows[it["id"]].setdefault(group, {})[t] = flows[it["id"]].get(group, {}).get(t, 0.0) + add
+        if is_multimodal_evtol(it):
+            to_multimodal += add
+        elif is_evtol_itinerary(it):
+            to_evtol += add
+        else:
+            to_ev += add
+    return {"to_evtol": to_evtol, "to_multimodal": to_multimodal, "to_ev": to_ev, "unserved": 0.0, "feasible_vt_alts": feasible_vt_alts}
+
+
 def _apply_vertiport_caps(
     flows: Dict[str, Dict[str, Dict[int, float]]],
     itineraries: List[Dict[str, Any]],
     times: List[int],
     cap_pax: Dict[str, Dict[int, float]],
-) -> Dict[str, Dict[str, Dict[int, float]]]:
+    utilities: Dict[str, Dict[str, Dict[int, float]]],
+    unserved_demand: Dict[str, Dict[str, Dict[int, float]]],
+) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, float]]:
     itineraries_by_od: Dict[str, List[Dict[str, Any]]] = {}
     evtol_by_dep: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -306,46 +398,195 @@ def _apply_vertiport_caps(
         if is_evtol_itinerary(it) and it.get("dep_station") is not None:
             evtol_by_dep.setdefault(it["dep_station"], []).append(it)
 
+    stats = {
+        "triggered_count": 0.0,
+        "excess_pax": 0.0,
+        "rerouted_to_evtol": 0.0,
+        "rerouted_to_multimodal": 0.0,
+        "rerouted_to_ev": 0.0,
+        "unserved": 0.0,
+        "feasible_vt_but_all_ev_count": 0.0,
+    }
+
     for dep, it_list in evtol_by_dep.items():
         for t in times:
             total = 0.0
             for it in it_list:
-                for group, time_map in flows[it["id"]].items():
-                    total += time_map.get(t, 0.0)
-            cap = cap_pax[dep][t]
-            if total <= cap:
+                for _, time_map in flows[it["id"]].items():
+                    total += float(time_map.get(t, 0.0))
+            cap = float(cap_pax.get(dep, {}).get(t, float("inf")))
+            if total <= cap + 1.0e-12 or total <= 0.0:
                 continue
-            if total <= 0.0:
-                continue
-            ratio = cap / total
+            stats["triggered_count"] += 1.0
+            ratio = cap / max(total, 1.0e-12)
             reductions: Dict[Tuple[str, str], float] = {}
+            excess = 0.0
             for it in it_list:
+                od_key = f"{it['od'][0]}-{it['od'][1]}"
                 for group, time_map in flows[it["id"]].items():
-                    key = (f"{it['od'][0]}-{it['od'][1]}", group)
-                    original = time_map.get(t, 0.0)
+                    original = float(time_map.get(t, 0.0))
                     reduced = original * ratio
-                    reductions[key] = reductions.get(key, 0.0) + (original - reduced)
+                    delta = original - reduced
+                    if delta <= 0.0:
+                        continue
                     flows[it["id"]].setdefault(group, {})[t] = reduced
+                    reductions[(od_key, group)] = reductions.get((od_key, group), 0.0) + delta
+                    excess += delta
+            stats["excess_pax"] += excess
 
             for (od_key, group), delta in reductions.items():
-                alternatives = [
-                    it
-                    for it in itineraries_by_od.get(od_key, [])
-                    if not is_evtol_itinerary(it)
-                ]
-                if not alternatives:
-                    raise ValueError(f"No non-eVTOL alternative to enforce cap for {od_key}, {group}, t={t}")
-                total_alt = sum(flows[it["id"]].get(group, {}).get(t, 0.0) for it in alternatives)
-                if total_alt <= 0.0:
-                    share = 1.0 / len(alternatives)
-                    for it in alternatives:
-                        flows[it["id"]].setdefault(group, {})[t] = flows[it["id"]].get(group, {}).get(t, 0.0) + delta * share
-                else:
-                    for it in alternatives:
-                        current = flows[it["id"]].get(group, {}).get(t, 0.0)
-                        flows[it["id"]].setdefault(group, {})[t] = current + delta * current / total_alt
+                rr = _reroute_excess_with_conditional_logit(
+                    flows=flows,
+                    itineraries_by_od=itineraries_by_od,
+                    utilities=utilities,
+                    od_key=od_key,
+                    group=group,
+                    t=t,
+                    excess_pax=delta,
+                    blocked_dep_station=dep,
+                    unserved_demand=unserved_demand,
+                )
+                stats["rerouted_to_evtol"] += rr["to_evtol"]
+                stats["rerouted_to_multimodal"] += rr["to_multimodal"]
+                stats["rerouted_to_ev"] += rr["to_ev"]
+                stats["unserved"] += rr["unserved"]
+                if rr["feasible_vt_alts"] > 0.0 and rr["to_evtol"] + rr["to_multimodal"] <= 1.0e-9 and rr["to_ev"] > 1.0e-9:
+                    stats["feasible_vt_but_all_ev_count"] += 1.0
 
-    return flows
+    return flows, stats
+
+
+def _enforce_aircraft_inventory(
+    flows: Dict[str, Dict[str, Dict[int, float]]],
+    itineraries: List[Dict[str, Any]],
+    times: List[int],
+    delta_t: float,
+    utilities: Dict[str, Dict[str, Dict[int, float]]],
+    unserved_demand: Dict[str, Dict[str, Dict[int, float]]],
+    vt_pax_per_departure_fast: float,
+    vt_pax_per_departure_slow: float,
+    vt_turnaround_lag: int,
+    vt_aircraft_init_by_station: Dict[str, float],
+) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Any]]:
+    stations = sorted({
+        st
+        for it in itineraries
+        if is_evtol_itinerary(it)
+        for st in [it.get("dep_station"), it.get("arr_station")]
+        if st is not None
+    })
+    itineraries_by_od: Dict[str, List[Dict[str, Any]]] = {}
+    vt_by_dep: Dict[str, List[Dict[str, Any]]] = {s: [] for s in stations}
+    for it in itineraries:
+        od_key = f"{it['od'][0]}-{it['od'][1]}"
+        itineraries_by_od.setdefault(od_key, []).append(it)
+        dep = it.get("dep_station")
+        if is_evtol_itinerary(it) and dep in vt_by_dep:
+            vt_by_dep[dep].append(it)
+
+    max_time = max(times) if times else 0
+    max_lag = int(vt_turnaround_lag) + 3
+    ext_times = list(range(min(times), max_time + max_lag + 2)) if times else []
+    ret_sched: Dict[str, Dict[int, float]] = {s: {tt: 0.0 for tt in ext_times} for s in stations}
+    inventory: Dict[str, Dict[int, float]] = {s: {} for s in stations}
+    departures: Dict[str, Dict[int, float]] = {s: {t: 0.0 for t in times} for s in stations}
+    returns: Dict[str, Dict[int, float]] = {s: {t: 0.0 for t in times} for s in stations}
+    avail_now: Dict[str, float] = {s: float(vt_aircraft_init_by_station.get(s, 0.0)) for s in stations}
+
+    stats = {
+        "binding_count": 0.0,
+        "excess_rerouted_to_evtol": 0.0,
+        "excess_rerouted_to_multimodal": 0.0,
+        "excess_rerouted_to_ev": 0.0,
+        "unserved": 0.0,
+        "feasible_vt_but_all_ev_count": 0.0,
+        "lag_oob_count": 0.0,
+    }
+
+    for t in times:
+        reductions: Dict[Tuple[str, str, str], float] = {}
+        for s in stations:
+            arrivals = float(ret_sched.get(s, {}).get(t, 0.0))
+            returns[s][t] = arrivals
+            avail_start = max(0.0, avail_now[s] + arrivals)
+            inventory[s][t] = avail_start
+
+            req_dep = 0.0
+            for it in vt_by_dep.get(s, []):
+                cls = get_evtol_service_class(it)
+                pax_per_dep = vt_pax_per_departure_fast if cls == "fast" else vt_pax_per_departure_slow
+                pax_per_dep = max(1.0e-6, float(pax_per_dep))
+                for _, time_map in flows.get(it["id"], {}).items():
+                    req_dep += float(time_map.get(t, 0.0)) / pax_per_dep
+
+            served_ratio = 1.0
+            if req_dep > avail_start + 1.0e-12:
+                stats["binding_count"] += 1.0
+                served_ratio = avail_start / max(req_dep, 1.0e-12)
+
+            served_dep = 0.0
+            for it in vt_by_dep.get(s, []):
+                od_key = f"{it['od'][0]}-{it['od'][1]}"
+                cls = get_evtol_service_class(it)
+                pax_per_dep = vt_pax_per_departure_fast if cls == "fast" else vt_pax_per_departure_slow
+                pax_per_dep = max(1.0e-6, float(pax_per_dep))
+                for group, time_map in flows[it["id"]].items():
+                    original = float(time_map.get(t, 0.0))
+                    served = original * served_ratio
+                    delta = original - served
+                    if delta > 0.0:
+                        reductions[(od_key, group, s)] = reductions.get((od_key, group, s), 0.0) + delta
+                    flows[it["id"]].setdefault(group, {})[t] = served
+                    flights = served / pax_per_dep
+                    served_dep += flights
+
+                    arr_station = it.get("arr_station")
+                    ft_raw = it.get("flight_time", 0.0)
+                    if isinstance(ft_raw, dict):
+                        flight_time = float(ft_raw.get(t, ft_raw.get(str(t), 0.0)))
+                    else:
+                        flight_time = float(ft_raw)
+                    lag = int(math.ceil(max(0.0, flight_time) / max(delta_t, 1.0e-9))) + int(vt_turnaround_lag)
+                    arr_t = t + lag
+                    if arr_station in ret_sched:
+                        ret_sched[arr_station][arr_t] = ret_sched[arr_station].get(arr_t, 0.0) + flights
+                    else:
+                        stats["lag_oob_count"] += 1.0
+
+            departures[s][t] = served_dep
+            avail_now[s] = max(0.0, avail_start - served_dep)
+
+        for (od_key, group, blocked_dep), delta in reductions.items():
+            rr = _reroute_excess_with_conditional_logit(
+                flows=flows,
+                itineraries_by_od=itineraries_by_od,
+                utilities=utilities,
+                od_key=od_key,
+                group=group,
+                t=t,
+                excess_pax=delta,
+                blocked_dep_station=blocked_dep,
+                unserved_demand=unserved_demand,
+            )
+            stats["excess_rerouted_to_evtol"] += rr["to_evtol"]
+            stats["excess_rerouted_to_multimodal"] += rr["to_multimodal"]
+            stats["excess_rerouted_to_ev"] += rr["to_ev"]
+            stats["unserved"] += rr["unserved"]
+            if rr["feasible_vt_alts"] > 0.0 and rr["to_evtol"] + rr["to_multimodal"] <= 1.0e-9 and rr["to_ev"] > 1.0e-9:
+                stats["feasible_vt_but_all_ev_count"] += 1.0
+
+    return flows, {
+        "aircraft_inventory_by_station": inventory,
+        "aircraft_departures_by_station": departures,
+        "aircraft_returns_by_station": returns,
+        "aircraft_binding_count": stats["binding_count"],
+        "aircraft_excess_rerouted_to_evtol": stats["excess_rerouted_to_evtol"],
+        "aircraft_excess_rerouted_to_multimodal": stats["excess_rerouted_to_multimodal"],
+        "aircraft_excess_rerouted_to_ev": stats["excess_rerouted_to_ev"],
+        "aircraft_unserved": stats["unserved"],
+        "aircraft_feasible_vt_but_all_ev_count": stats["feasible_vt_but_all_ev_count"],
+        "aircraft_lag_oob_count": stats["lag_oob_count"],
+    }
 
 
 def compute_residuals(
@@ -534,6 +775,23 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "lp_ok": None,
         "mode_share_by_service_class_is_legacy_mixed": True,
         "mode_share_by_service_class_legacy_note": "legacy mode_share_by_service_class mixes pure eVTOL and multimodal EV_to_eVTOL",
+        "vertiport_cap_triggered_count": 0.0,
+        "vertiport_cap_excess_pax": 0.0,
+        "vertiport_cap_rerouted_to_evtol": 0.0,
+        "vertiport_cap_rerouted_to_multimodal": 0.0,
+        "vertiport_cap_rerouted_to_ev": 0.0,
+        "vertiport_cap_unserved": 0.0,
+        "vertiport_cap_feasible_vt_but_all_ev_count": 0.0,
+        "aircraft_inventory_by_station": {},
+        "aircraft_departures_by_station": {},
+        "aircraft_returns_by_station": {},
+        "aircraft_binding_count": 0.0,
+        "aircraft_excess_rerouted_to_evtol": 0.0,
+        "aircraft_excess_rerouted_to_multimodal": 0.0,
+        "aircraft_excess_rerouted_to_ev": 0.0,
+        "aircraft_unserved": 0.0,
+        "aircraft_feasible_vt_but_all_ev_count": 0.0,
+        "aircraft_lag_oob_count": 0.0,
     }
 
     dx = 0.0
@@ -623,7 +881,51 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
 
         cap_pax = data["parameters"].get("vertiport_cap_pax")
         if cap_pax:
-            flows = _apply_vertiport_caps(flows, itineraries, times, cap_pax)
+            flows, cap_stats = _apply_vertiport_caps(
+                flows,
+                itineraries,
+                times,
+                cap_pax,
+                logit_details.get("utilities", {}),
+                diagnostics["unserved_demand"],
+            )
+            diagnostics["vertiport_cap_triggered_count"] = cap_stats.get("triggered_count", 0.0)
+            diagnostics["vertiport_cap_excess_pax"] = cap_stats.get("excess_pax", 0.0)
+            diagnostics["vertiport_cap_rerouted_to_evtol"] = cap_stats.get("rerouted_to_evtol", 0.0)
+            diagnostics["vertiport_cap_rerouted_to_multimodal"] = cap_stats.get("rerouted_to_multimodal", 0.0)
+            diagnostics["vertiport_cap_rerouted_to_ev"] = cap_stats.get("rerouted_to_ev", 0.0)
+            diagnostics["vertiport_cap_unserved"] = cap_stats.get("unserved", 0.0)
+            diagnostics["vertiport_cap_feasible_vt_but_all_ev_count"] = cap_stats.get("feasible_vt_but_all_ev_count", 0.0)
+
+        vt_fast = float(data.get("parameters", {}).get("vt_pax_per_departure_fast", 2.0))
+        vt_slow = float(data.get("parameters", {}).get("vt_pax_per_departure_slow", 4.0))
+        vt_turn_lag = int(data.get("parameters", {}).get("vt_turnaround_lag", 1))
+        vt_init = data.get("parameters", {}).get("vt_aircraft_init_by_station", {})
+        flows, aircraft_diag = _enforce_aircraft_inventory(
+            flows,
+            itineraries,
+            times,
+            delta_t,
+            logit_details.get("utilities", {}),
+            diagnostics["unserved_demand"],
+            vt_fast,
+            vt_slow,
+            vt_turn_lag,
+            vt_init,
+        )
+        diagnostics.update(aircraft_diag)
+        diagnostics["unserved_demand_total"] = sum(
+            float(v)
+            for od in diagnostics.get("unserved_demand", {}).values()
+            for grp in od.values()
+            for v in grp.values()
+        )
+        diagnostics["unserved_cases_count"] = sum(
+            1
+            for od in diagnostics.get("unserved_demand", {}).values()
+            for grp in od.values()
+            for _t in grp.keys()
+        )
 
         d_vt_route = aggregate_evtol_demand(flows, itineraries, times)
         d_vt_dep = aggregate_evtol_dep_demand(itineraries, flows, times)
