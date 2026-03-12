@@ -1,7 +1,7 @@
 {
   "meta": {
-    "timestamp": "2026-03-12T04:13:51.343196Z",
-    "git_commit_if_available": "a8fa083",
+    "timestamp": "2026-03-12T04:50:51.311539Z",
+    "git_commit_if_available": "bd6c8f0",
     "python_version": "3.10.19 (main, Jan 12 2026, 17:41:56) [GCC 13.3.0]",
     "platform": "Linux-6.12.47-x86_64-with-glibc2.39",
     "module_paths": {
@@ -7319,6 +7319,9 @@
     "peak_t_selection_rule": "max_total_demand",
     "peak_t_total_demand": 200.09445999999997,
     "case_label": "mechanism_validation_illustrative",
+    "ignored_config_fields": [
+      "K_paths (ignored when use_generator=false)"
+    ],
     "parameter_effective": {
       "min_vt_reroute_share": 0.35,
       "surcharge_kappa": 0.06,
@@ -9728,6 +9731,8 @@
     "audit_ok": true,
     "max_residual_end": 11.12209927147174,
     "patience_only_stop": true,
+    "stopped_by_patience_only": true,
+    "audit_has_warning": true,
     "iter_count": 16,
     "dprice_start": 0.0,
     "max_surcharge": 0.0,

@@ -123,6 +123,13 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return cfg
 
 
+
+
+def _ignored_config_fields(config: Dict[str, Any]) -> List[str]:
+    ignored: List[str] = []
+    if not bool(config.get("use_generator", False)) and "K_paths" in config:
+        ignored.append("K_paths (ignored when use_generator=false)")
+    return ignored
 def _select_peak_t(data: Dict[str, Any], times: List[int], config: Dict[str, Any]) -> Tuple[int, str, float]:
     """Select peak analysis period.
 
@@ -899,6 +906,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "peak_t_selection_rule": peak_t_rule,
         "peak_t_total_demand": peak_t_total_demand,
         "case_label": str(config.get("case_label", "illustrative")),
+        "ignored_config_fields": _ignored_config_fields(config),
         "parameter_effective": {
             "min_vt_reroute_share": config.get("min_vt_reroute_share", 0.0),
             "surcharge_kappa": config.get("surcharge_kappa"),
@@ -1666,6 +1674,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "audit_ok": False,
             "max_residual_end": conv_flags["max_residual_end"],
             "patience_only_stop": conv_flags["patience_only_stop"],
+            "stopped_by_patience_only": conv_flags["patience_only_stop"],
+            "audit_has_warning": False,
         },
         "data_parameters": {**data.get("parameters", {}), "expected_groups": list(data.get("sets", {}).get("groups", []))},
         "meta": data.get("meta", {}),
@@ -1680,6 +1690,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     audit = self_audit(results, config)
     results["SelfAudit"] = audit
     results["diagnostics"]["audit_ok"] = bool(audit.get("ok", False))
+    results["diagnostics"]["audit_has_warning"] = bool(audit.get("warnings"))
     must_raise_tokens = [
         "Requested HiGHS but non-HiGHS solver used",
         "inventory balance broken",
@@ -1770,7 +1781,7 @@ def main() -> None:
 
         git_commit = None
         try:
-            git_commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+            git_commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
         except Exception:
             git_commit = None
 

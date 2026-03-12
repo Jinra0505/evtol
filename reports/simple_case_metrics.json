@@ -5,10 +5,12 @@
   "audit_raise": true,
   "strict_convergence": false,
   "stop_reason": "max_total_iter",
+  "stopped_by_patience_only": false,
   "iter_count_total": 240,
   "converged_strictly": false,
   "converged_loose": false,
   "audit_ok": true,
+  "audit_has_warning": true,
   "max_residual_end": 20.89761464851499,
   "patience_only_stop": false,
   "dx_end": 0.3245162672380635,
@@ -108,5 +110,8 @@
     }
   },
   "case_label": "stress_test_toy",
-  "bottleneck_summary": "aircraft_inventory_or_turnaround_dominant_not_shared_power"
+  "bottleneck_summary": "aircraft_inventory_or_turnaround_dominant_not_shared_power",
+  "ignored_config_fields": [
+    "K_paths (ignored when use_generator=false)"
+  ]
 }

@@ -1,1 +1,25 @@
-{"required_paths": []}
+{
+  "required_paths": [
+    "meta.T",
+    "meta.delta_t",
+    "config.max_iter",
+    "config.tol",
+    "config.use_generator",
+    "sets.time",
+    "sets.groups",
+    "sets.stations",
+    "parameters.q",
+    "parameters.VOT",
+    "parameters.lambda",
+    "parameters.arcs",
+    "parameters.stations",
+    "parameters.electricity_price",
+    "parameters.vertiport_storage",
+    "parameters.vertiport_cap_pax",
+    "parameters.vt_departure_capacity_total",
+    "parameters.vt_departure_capacity_fast",
+    "parameters.vt_pax_per_departure_fast",
+    "parameters.vt_pax_per_departure_slow",
+    "itineraries"
+  ]
+}
