@@ -31,6 +31,27 @@ class LPFailed(RuntimeError):
         super().__init__(f"Shared power HiGHS LP failed: {payload.get('message', 'unknown error')}")
 
 
+
+
+def _terminal_soc_target(storage_cfg: Dict[str, Any], config: Dict[str, Any], station: str) -> float:
+    """Terminal SOC lower bound target in kWh for one station.
+
+    Policies:
+    - at_least_min (legacy)
+    - at_least_init (default)
+    - target (uses terminal_soc_target_kwh, scalar or by station mapping)
+    """
+    policy = str(config.get("terminal_soc_policy", "at_least_init"))
+    b_min = float(storage_cfg.get("B_min", 0.0))
+    b_init = float(storage_cfg.get("B_init", b_min))
+    if policy == "at_least_min":
+        return b_min
+    if policy == "target":
+        raw = config.get("terminal_soc_target_kwh", b_init)
+        if isinstance(raw, dict):
+            return float(raw.get(station, b_init))
+        return float(raw)
+    return b_init
 def compute_station_loads_from_flows(
     data: Dict[str, Any],
     itineraries: list[Dict[str, Any]],
@@ -162,9 +183,10 @@ def _solve_shared_power_core_gurobi(
                     name=f"B_bal_{dep}_{t}",
                 )
         t_last = times[-1]
+        b_terminal_target = _terminal_soc_target(storage_params[dep], data.get("config", {}), dep)
         model.addConstr(
             B[dep, t_last] + eta * P_vt[dep, t_last] * delta_t - (e_dep[dep][t_last] - shed_vt[dep, t_last])
-            >= storage_params[dep]["B_min"],
+            >= b_terminal_target,
             name=f"B_terminal_{dep}_{t_last}",
         )
 
@@ -310,6 +332,14 @@ def solve_shared_power_inventory_highs(
 
     A_ub = []
     b_ub = []
+    # Terminal SOC floor to avoid free depletion of initial storage.
+    for dep in deps:
+        b_terminal_target = _terminal_soc_target(storage_params[dep], data.get("config", {}), dep)
+        row = [0.0] * n
+        row[var_idx[("B", dep, t_terminal)]] = -1.0
+        A_ub.append(row)
+        b_ub.append(-float(b_terminal_target))
+
     cap_rows = []
     for s in stations:
         for t in times:
@@ -546,6 +576,13 @@ def _solve_shared_power_core_heuristic(
             shed_vt_out[s][t] = shed_vt
             b_next = b + eta * p_vt * delta_t - (e_req - shed_vt)
             b_next = min(b_max, max(b_min, b_next))
+            if idx == len(times) - 1:
+                b_target = _terminal_soc_target(storage_params.get(s, {}), data.get("config", {}), s)
+                if b_next < b_target:
+                    extra_shed = min(e_req - shed_vt, max(0.0, b_target - b_next))
+                    shed_vt += extra_shed
+                    shed_vt_out[s][t] = shed_vt
+                    b_next = min(b_max, max(b_min, b + eta * p_vt * delta_t - (e_req - shed_vt)))
             B_out[s][times_ext[idx + 1]] = b_next
             b = b_next
 

@@ -89,6 +89,17 @@ def _ev_stops(it: Dict[str, Any]) -> List[Dict[str, Any]]:
     return stops
 
 
+
+
+def _access_energy_for_time(it: Dict[str, Any], t: int) -> Tuple[float, float]:
+    """Return (explicit_access_station_energy, scalar_access_energy_kwh) per pax at time t."""
+    explicit = 0.0
+    for stop in it.get("access_stations", []) or []:
+        if stop.get("t") != t:
+            continue
+        explicit += float(stop.get("energy", 0.0) or 0.0)
+    scalar = float(_value_by_time(it.get("access_energy_kwh", 0.0), t, 0.0) or 0.0)
+    return explicit, scalar
 def _access_station_ids(it: Dict[str, Any], t: int | None = None) -> List[str]:
     access = it.get("access_stations", [])
     out: List[str] = []
@@ -186,8 +197,15 @@ def compute_itinerary_costs(
             transfer_time_source = "none"
             access_energy_price_source = "none"
 
-            # Optional explicit access energy (multimodal)
-            access_energy_kwh = _value_by_time(it.get("access_energy_kwh", 0.0), t, 0.0)
+            # Optional scalar access energy (multimodal).
+            # If access_stations already provide per-station energy for this time, scalar access_energy_kwh
+            # is treated as redundant metadata and not re-charged to avoid double counting.
+            explicit_access_energy, scalar_access_energy = _access_energy_for_time(it, t)
+            access_energy_kwh = scalar_access_energy if explicit_access_energy <= 1.0e-12 else 0.0
+            access_energy_consistency = "ok"
+            if explicit_access_energy > 1.0e-12 and scalar_access_energy > 1.0e-12:
+                rel_gap = abs(explicit_access_energy - scalar_access_energy) / max(1.0e-6, max(explicit_access_energy, scalar_access_energy))
+                access_energy_consistency = "duplicate_field_used_explicit" if rel_gap <= 0.15 else "inconsistent_duplicate_field_used_explicit"
             if access_energy_kwh > 0.0:
                 access_station_ids = _access_station_ids(it, t)
                 if access_station_ids:
@@ -214,6 +232,7 @@ def compute_itinerary_costs(
                             "transfer_time_applied": 0.0,
                             "transfer_time_source": "none",
                             "access_energy_price_source": access_energy_price_source,
+                        "access_energy_consistency": access_energy_consistency,
                         },
                     }
                     continue
@@ -501,7 +520,8 @@ def aggregate_ev_energy_demand(
                 t = stop["t"]
                 energy[station][t] += float(stop.get("energy", 0.0)) * float(time_map.get(t, 0.0))
             for t in times:
-                access_energy = _value_by_time(it.get("access_energy_kwh", 0.0), t, 0.0)
+                explicit_access_energy, scalar_access_energy = _access_energy_for_time(it, t)
+                access_energy = scalar_access_energy if explicit_access_energy <= 1.0e-12 else 0.0
                 if access_energy <= 0.0:
                     continue
                 allocated = False

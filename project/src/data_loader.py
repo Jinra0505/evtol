@@ -31,6 +31,37 @@ def _coerce_numeric_values(obj: Any) -> Any:
     return obj
 
 
+
+
+def _normalize_od_key(od: Any) -> str:
+    if isinstance(od, (list, tuple)) and len(od) >= 2:
+        return f"{od[0]}-{od[1]}"
+    txt = str(od)
+    if "->" in txt:
+        a, b = txt.split("->", 1)
+        return f"{a.strip()}-{b.strip()}"
+    if "-" in txt:
+        a, b = txt.split("-", 1)
+        return f"{a.strip()}-{b.strip()}"
+    return txt
+
+
+def _normalize_od_structures(data: Dict[str, Any]) -> None:
+    params = data.setdefault("parameters", {})
+    q = params.get("q")
+    if isinstance(q, dict):
+        q_new = {}
+        for od, v in q.items():
+            q_new[_normalize_od_key(od)] = v
+        params["q"] = q_new
+    its = data.get("itineraries", [])
+    for it in its if isinstance(its, list) else []:
+        od = it.get("od")
+        if isinstance(od, str):
+            key = _normalize_od_key(od)
+            if "-" in key:
+                a, b = key.split("-", 1)
+                it["od"] = [a, b]
 def _validate_basic_shapes(data: Dict[str, Any]) -> None:
     sets = data.get("sets", {})
     params = data.get("parameters", {})
@@ -80,6 +111,7 @@ def load_data(data_path: str, schema_path: str) -> Dict[str, Any]:
 
     data = _coerce_numeric_keys(data)
     data = _coerce_numeric_values(data)
+    _normalize_od_structures(data)
 
     required_paths = schema.get("required_paths", [])
     try:

@@ -96,10 +96,15 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
         cfg["surcharge_kappa"] = cfg.get("shadow_price_scale")
     cfg.setdefault("surcharge_beta", 1.0)
     cfg.setdefault("surcharge_method", "shadow_lp")
+    cfg.setdefault("surcharge_decay_raw_threshold", 1.0e-3)
+    cfg.setdefault("surcharge_decay_factor", 0.6)
+    cfg.setdefault("reroute_logit_temperature", 1.25)
+    cfg.setdefault("min_multimodal_reroute_share", 0.05)
     cfg.setdefault("shadow_price_scale", 1.0)
     cfg.setdefault("shadow_price_cap_mult", 10.0)
     cfg.setdefault("shadow_price_cap_abs", None)
     cfg.setdefault("vt_reliability_floor", 0.05)
+    cfg.setdefault("min_vt_reroute_share", 0.1)
     cfg.setdefault("vt_reliability_alpha", None)
     cfg.setdefault("vt_reliability_skip_below", 0.0)
     cfg.setdefault("vt_reliability_gamma", 0.0)
@@ -111,12 +116,15 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     cfg.setdefault("strict_audit", True)
     cfg.setdefault("audit_raise", True)
     cfg.setdefault("strict_convergence", False)
+    cfg.setdefault("patience_require_strict_gate", True)
     cfg.setdefault("shared_power_solver", "highs")
     cfg.setdefault("output_full_json", True)
     cfg.setdefault("power_violation_mode", "net")
     cfg.setdefault("voll_ev_per_kwh", 50.0)
     cfg.setdefault("voll_vt_per_kwh", 200.0)
     cfg.setdefault("fail_on_infeasible_demand", False)
+    cfg.setdefault("terminal_soc_policy", "at_least_init")
+    cfg.setdefault("terminal_soc_target_kwh", None)
     cfg.setdefault("peak_t_selection_rule", "max_total_demand")
     cfg.setdefault("manual_peak_t", None)
     cfg.setdefault("case_label", "illustrative")
@@ -449,6 +457,8 @@ def _reroute_excess_with_conditional_logit(
     blocked_dep_station: str | None,
     unserved_demand: Dict[str, Dict[str, Dict[int, float]]],
     min_vt_reroute_share: float = 0.0,
+    min_multimodal_reroute_share: float = 0.0,
+    reroute_logit_temperature: float = 1.0,
 ) -> Dict[str, float]:
     if excess_pax <= 0.0:
         return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": 0.0, "feasible_vt_alts": 0.0, "feasible_total_alts": 0.0, "feasible_multimodal_alts": 0.0}
@@ -476,8 +486,9 @@ def _reroute_excess_with_conditional_logit(
         unserved_demand.setdefault(od_key, {}).setdefault(group, {})[t] = unserved_demand.setdefault(od_key, {}).setdefault(group, {}).get(t, 0.0) + excess_pax
         return {"to_evtol": 0.0, "to_multimodal": 0.0, "to_ev": 0.0, "unserved": excess_pax, "feasible_vt_alts": feasible_vt_alts, "feasible_total_alts": 0.0, "feasible_multimodal_alts": 0.0}
 
-    max_u = max(u for _, u in feasible)
-    weights = [math.exp(u - max_u) for _, u in feasible]
+    temp = max(1.0e-6, float(reroute_logit_temperature))
+    max_u = max(u / temp for _, u in feasible)
+    weights = [math.exp((u / temp) - max_u) for _, u in feasible]
     den = sum(weights)
     if den <= 0.0:
         unserved_demand.setdefault(od_key, {}).setdefault(group, {})[t] = unserved_demand.setdefault(od_key, {}).setdefault(group, {}).get(t, 0.0) + excess_pax
@@ -485,6 +496,7 @@ def _reroute_excess_with_conditional_logit(
 
     probs = [w / den for w in weights]
     vt_idx = [i for i, (it, _) in enumerate(feasible) if is_evtol_itinerary(it)]
+    mm_idx = [i for i, (it, _) in enumerate(feasible) if is_multimodal_evtol(it)]
     ev_idx = [i for i, (it, _) in enumerate(feasible) if not is_evtol_itinerary(it)]
     vt_prob = sum(probs[i] for i in vt_idx)
     if vt_idx and min_vt_reroute_share > 0.0 and vt_prob < min_vt_reroute_share and ev_idx:
@@ -497,6 +509,20 @@ def _reroute_excess_with_conditional_logit(
                     probs[i] += delta * (probs[i] / max(vt_prob, 1.0e-12))
                 for i in ev_idx:
                     probs[i] -= delta * (probs[i] / ev_mass)
+
+    mm_prob = sum(probs[i] for i in mm_idx)
+    if mm_idx and min_multimodal_reroute_share > 0.0 and mm_prob < min_multimodal_reroute_share:
+        target_mm = min(float(min_multimodal_reroute_share), 1.0)
+        if mm_prob < target_mm:
+            delta_mm = target_mm - mm_prob
+            donor_idx = [i for i in range(len(probs)) if i not in mm_idx]
+            donor_mass = sum(probs[i] for i in donor_idx)
+            if donor_mass > 1.0e-12:
+                for i in mm_idx:
+                    probs[i] += delta_mm * (probs[i] / max(mm_prob, 1.0e-12))
+                for i in donor_idx:
+                    probs[i] -= delta_mm * (probs[i] / donor_mass)
+
     probs = [max(0.0, p) for p in probs]
     norm = sum(probs)
     probs = [p / max(norm, 1.0e-12) for p in probs]
@@ -524,6 +550,8 @@ def _apply_vertiport_caps(
     utilities: Dict[str, Dict[str, Dict[int, float]]],
     unserved_demand: Dict[str, Dict[str, Dict[int, float]]],
     min_vt_reroute_share: float = 0.0,
+    min_multimodal_reroute_share: float = 0.0,
+    reroute_logit_temperature: float = 1.0,
 ) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, float]]:
     itineraries_by_od: Dict[str, List[Dict[str, Any]]] = {}
     evtol_by_dep: Dict[str, List[Dict[str, Any]]] = {}
@@ -584,6 +612,8 @@ def _apply_vertiport_caps(
                     blocked_dep_station=dep,
                     unserved_demand=unserved_demand,
                     min_vt_reroute_share=min_vt_reroute_share,
+                    min_multimodal_reroute_share=min_multimodal_reroute_share,
+                    reroute_logit_temperature=reroute_logit_temperature,
                 )
                 stats["rerouted_to_evtol"] += rr["to_evtol"]
                 stats["rerouted_to_multimodal"] += rr["to_multimodal"]
@@ -611,6 +641,8 @@ def _enforce_aircraft_inventory(
     vt_turnaround_lag: int,
     vt_aircraft_init_by_station: Dict[str, float],
     min_vt_reroute_share: float = 0.0,
+    min_multimodal_reroute_share: float = 0.0,
+    reroute_logit_temperature: float = 1.0,
 ) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Any]]:
     stations = sorted({
         st
@@ -714,6 +746,8 @@ def _enforce_aircraft_inventory(
                 blocked_dep_station=blocked_dep,
                 unserved_demand=unserved_demand,
                 min_vt_reroute_share=min_vt_reroute_share,
+                min_multimodal_reroute_share=min_multimodal_reroute_share,
+                reroute_logit_temperature=reroute_logit_temperature,
             )
             stats["excess_rerouted_to_evtol"] += rr["to_evtol"]
             stats["excess_rerouted_to_multimodal"] += rr["to_multimodal"]
@@ -876,10 +910,25 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     representative_od = config.get("representative_od")
     if not representative_od:
         representative_od = "A-B" if "A-B" in demand_keys else (demand_keys[0] if demand_keys else "")
+    access_overlap_itins = 0
+    access_inconsistent_itins = 0
+    for it in itineraries:
+        access_stops = it.get("access_stations", []) or []
+        scalar = it.get("access_energy_kwh", 0.0)
+        for t in times:
+            explicit = sum(float(st.get("energy", 0.0) or 0.0) for st in access_stops if st.get("t") == t)
+            scalar_t = float(scalar.get(t, scalar.get(str(t), 0.0)) if isinstance(scalar, dict) else (scalar or 0.0))
+            if explicit > 1.0e-12 and scalar_t > 1.0e-12:
+                access_overlap_itins += 1
+                rel = abs(explicit - scalar_t) / max(1.0e-6, max(explicit, scalar_t))
+                if rel > 0.15:
+                    access_inconsistent_itins += 1
+                break
     diagnostics = {
         "dx_history": [],
         "dn_history": [],
         "dprice_history": [],
+        "dprice_raw_history": [],
         "max_surcharge_history": [],
         "price_snapshots": [],
         "mode_share": [],
@@ -905,6 +954,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         },
         "peak_t_selection_rule": peak_t_rule,
         "peak_t_total_demand": peak_t_total_demand,
+        "representative_od": representative_od,
         "case_label": str(config.get("case_label", "illustrative")),
         "ignored_config_fields": _ignored_config_fields(config),
         "parameter_effective": {
@@ -913,6 +963,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "surcharge_beta": config.get("surcharge_beta"),
             "K_paths": config.get("K_paths"),
             "eps_improve": config.get("eps_improve"),
+            "reroute_logit_temperature": config.get("reroute_logit_temperature"),
+            "min_multimodal_reroute_share": config.get("min_multimodal_reroute_share"),
+            "patience_require_strict_gate": config.get("patience_require_strict_gate"),
             "shadow_price_scale": config.get("shadow_price_scale"),
             "shadow_price_cap_mult": config.get("shadow_price_cap_mult"),
             "shadow_price_cap_abs": config.get("shadow_price_cap_abs"),
@@ -920,6 +973,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "strict_convergence": config.get("strict_convergence"),
             "strict_audit": config.get("strict_audit"),
             "audit_raise": config.get("audit_raise"),
+            "terminal_soc_policy": config.get("terminal_soc_policy"),
+            "terminal_soc_target_kwh": config.get("terminal_soc_target_kwh"),
         },
         "scipy_version": charging.SCIPY_VERSION,
         "scipy_ok": bool(charging.HAS_SCIPY),
@@ -943,6 +998,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "aircraft_unserved": 0.0,
         "aircraft_feasible_vt_but_all_ev_count": 0.0,
         "aircraft_lag_oob_count": 0.0,
+        "power_binding_count": 0,
+        "access_energy_overlap_itineraries": access_overlap_itins,
+        "access_energy_inconsistent_itineraries": access_inconsistent_itins,
     }
 
     dx = 0.0
@@ -1043,6 +1101,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 logit_details.get("utilities", {}),
                 diagnostics["unserved_demand"],
                 min_vt_reroute_share=float(config.get("min_vt_reroute_share", 0.0)),
+                min_multimodal_reroute_share=float(config.get("min_multimodal_reroute_share", 0.0)),
+                reroute_logit_temperature=float(config.get("reroute_logit_temperature", 1.0)),
             )
             diagnostics["vertiport_cap_triggered_count"] = cap_stats.get("triggered_count", 0.0)
             diagnostics["vertiport_cap_excess_pax"] = cap_stats.get("excess_pax", 0.0)
@@ -1070,6 +1130,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             vt_turn_lag,
             vt_init,
             min_vt_reroute_share=float(config.get("min_vt_reroute_share", 0.0)),
+            min_multimodal_reroute_share=float(config.get("min_multimodal_reroute_share", 0.0)),
+            reroute_logit_temperature=float(config.get("reroute_logit_temperature", 1.0)),
         )
         diagnostics.update(aircraft_diag)
         diagnostics["unserved_demand_total"] = sum(
@@ -1194,6 +1256,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 shed_ratio_map[s][t] = shed_ratio
 
         prev_surcharge = {s: {t: energy_surcharge[s][t] for t in times} for s in stations}
+        prev_raw = {s: {t: float(raw_surcharge[s][t]) for t in times} for s in stations}
         alpha_override = config.get("surcharge_msa_alpha")
         alpha = float(alpha_override) if alpha_override is not None else 1.0 / (iteration + 1.0)
         alpha_vt = config.get("vt_reliability_alpha")
@@ -1201,7 +1264,12 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
 
         for s in stations:
             for t in times:
-                energy_surcharge[s][t] = (1.0 - alpha) * energy_surcharge[s][t] + alpha * raw_surcharge[s][t]
+                candidate = (1.0 - alpha) * energy_surcharge[s][t] + alpha * raw_surcharge[s][t]
+                raw_thr = float(config.get("surcharge_decay_raw_threshold", 1.0e-3))
+                decay = float(config.get("surcharge_decay_factor", 0.6))
+                if abs(float(raw_surcharge[s][t])) <= raw_thr:
+                    candidate = min(candidate, decay * energy_surcharge[s][t])
+                energy_surcharge[s][t] = max(0.0, candidate)
                 vt_next = (1.0 - alpha_vt) * vt_service_prob[s][t] + alpha_vt * vt_service_prob_target[s][t]
                 vt_floor = float(config.get("vt_reliability_floor", 0.05))
                 vt_service_prob[s][t] = min(1.0, max(vt_floor, vt_next))
@@ -1298,10 +1366,14 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         dprice = max(
             abs(energy_surcharge[s][t] - prev_surcharge[s][t]) for s in stations for t in times
         )
+        dprice_raw = max(
+            abs(raw_surcharge[s][t] - prev_raw[s][t]) for s in stations for t in times
+        )
         max_surcharge = max(energy_surcharge[s][t] for s in stations for t in times)
         diagnostics["dx_history"].append(dx)
         diagnostics["dn_history"].append(dn)
         diagnostics["dprice_history"].append(dprice)
+        diagnostics["dprice_raw_history"].append(dprice_raw)
         diagnostics["max_surcharge_history"].append(max_surcharge)
 
         peak_entries = [diagnostics["power_tightness"].get(s, {}).get(peak_t, {}) for s in stations]
@@ -1485,9 +1557,37 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 )
 
         if iteration + 1 >= min_iters:
-            metric = max(dx, dn, dprice)
+            metric = max(dx, dn, dprice_raw)
             improved = (prev_metric - metric) > eps_improve
-            if metric < config["tol"] or improved:
+            strict_gate_ok = False
+            if bool(config.get("patience_require_strict_gate", True)):
+                residuals_iter = compute_residuals(
+                    data,
+                    itineraries,
+                    flows,
+                    arc_flows,
+                    x_new,
+                    tau,
+                    n_series,
+                    g_series,
+                    inc_road,
+                    inc_station,
+                    utilization,
+                    u_new,
+                )
+                strict_gate_ok = _convergence_flags(
+                    dx,
+                    dn,
+                    dprice_raw,
+                    residuals_iter,
+                    float(config.get("tol", 0.0)),
+                    True,
+                )["converged_strictly"]
+            if bool(config.get("patience_require_strict_gate", True)):
+                qualifies = strict_gate_ok
+            else:
+                qualifies = (metric < config["tol"]) or improved
+            if qualifies:
                 good_count += 1
             else:
                 good_count = 0
@@ -1534,7 +1634,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         utilization,
         u_new,
     )
-    conv_flags = _convergence_flags(dx, dn, dprice, residuals, float(config.get("tol", 0.0)), bool(config.get("strict_convergence", False)))
+    dprice_for_conv = diagnostics.get("dprice_raw_history", [dprice])[-1] if diagnostics.get("dprice_raw_history") else dprice
+    conv_flags = _convergence_flags(dx, dn, dprice_for_conv, residuals, float(config.get("tol", 0.0)), bool(config.get("strict_convergence", False)))
     conv_flags["patience_only_stop"] = bool(stop_reason == "patience" and not conv_flags["converged_strictly"])
 
     if run_dispatch:
@@ -1607,6 +1708,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         for t in times:
             if float(((shadow_prices or {}).get(s, {}).get(t, 0.0) or 0.0)) > 1.0e-9:
                 positive_mu_points += 1
+    diagnostics["power_binding_count"] = int(positive_mu_points)
     if positive_mu_points == 0 and float(diagnostics.get("aircraft_binding_count", 0.0)) > 0:
         diagnostics["bottleneck_summary"] = "aircraft_inventory_or_turnaround_dominant_not_shared_power"
     else:
@@ -1669,6 +1771,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "dx_end": dx,
             "dn_end": dn,
             "dprice_end": dprice,
+            "dprice_raw_end": diagnostics.get("dprice_raw_history", [dprice])[-1] if diagnostics.get("dprice_raw_history") else dprice,
             "converged_loose": conv_flags["converged_loose"],
             "converged_strictly": conv_flags["converged_strictly"],
             "audit_ok": False,
@@ -1831,6 +1934,7 @@ def main() -> None:
                 "dx_end": diagnostics_full.get("dx_end"),
                 "dn_end": diagnostics_full.get("dn_end"),
                 "dprice_end": diagnostics_full.get("dprice_end"),
+                "dprice_raw_end": diagnostics_full.get("dprice_raw_end"),
                 "max_surcharge": diagnostics_full.get("max_surcharge"),
                 "peak_t": diagnostics_full.get("peak_t"),
                 "peak_prices": diagnostics_full.get("peak_prices"),
