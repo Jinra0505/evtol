@@ -883,6 +883,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     arcs = data["sets"]["arcs"]
     stations = data["sets"]["stations"]
     groups = list(data.get("sets", {}).get("groups", []))
+    ev_stations = list(data.get("sets", {}).get("ev_stations", stations))
+    hybrid_stations = list(data.get("sets", {}).get("hybrid_stations", stations))
+    power_stations = hybrid_stations
     delta_t = data["meta"]["delta_t"]
     config = _normalize_config(data["config"])
     itineraries = list(data["itineraries"])
@@ -892,7 +895,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     electricity_price = data["parameters"]["electricity_price"]
 
     arc_flows = {a: {t: 0.0 for t in times} for a in arcs}
-    utilization = {s: {t: 0.0 for t in times} for s in stations}
+    utilization = {s: {t: 0.0 for t in times} for s in ev_stations}
     n_series = update_accumulation(
         data["parameters"]["n0"],
         [0.0 for _ in times],
@@ -900,9 +903,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         delta_t,
     )
     g_series = compute_g(n_series, data["parameters"]["mfd"])
-    energy_surcharge = {s: {t: 0.0 for t in times} for s in stations}
-    vt_service_prob = {s: {t: 1.0 for t in times} for s in stations}
-    ev_service_prob = {s: {t: 1.0 for t in times} for s in stations}
+    energy_surcharge = {s: {t: 0.0 for t in times} for s in power_stations}
+    vt_service_prob = {s: {t: 1.0 for t in times} for s in power_stations}
+    ev_service_prob = {s: {t: 1.0 for t in times} for s in power_stations}
     min_iters = int(config.get("min_iters", 10))
     patience = int(config.get("patience", 5))
     stop_reason = "max_iters"
@@ -1016,9 +1019,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     e_dep: Dict[str, Dict[int, float]] = {}
     flows_prev: Dict[str, Dict[str, Dict[int, float]]] | None = None
     shadow_prices: Dict[str, Dict[int, float]] | None = None
-    raw_surcharge: Dict[str, Dict[int, float]] = {s: {t: 0.0 for t in times} for s in stations}
-    raw_surcharge_uncapped: Dict[str, Dict[int, float | None]] = {s: {t: 0.0 for t in times} for s in stations}
-    raw_zero_streak: Dict[str, Dict[int, int]] = {s: {t: 0 for t in times} for s in stations}
+    raw_surcharge: Dict[str, Dict[int, float]] = {s: {t: 0.0 for t in times} for s in power_stations}
+    raw_surcharge_uncapped: Dict[str, Dict[int, float | None]] = {s: {t: 0.0 for t in times} for s in power_stations}
+    raw_zero_streak: Dict[str, Dict[int, int]] = {s: {t: 0 for t in times} for s in power_stations}
     shed_ev: Dict[str, Dict[int, float]] | None = None
     shed_vt: Dict[str, Dict[int, float]] | None = None
     P_vt_lp: Dict[str, Dict[int, float]] | None = None
@@ -1039,17 +1042,17 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     auto_extend = int(config.get("auto_extend_step", config.get("max_iter_auto_extend", 0)))
     max_total_iter = int(config.get("max_total_iter", 800))
     iteration = 0
-    ev_station_waits = {s: {t: 0.0 for t in times} for s in stations}
-    vt_departure_waits = {s: {"fast": {t: 0.0 for t in times}, "slow": {t: 0.0 for t in times}} for s in stations}
-    vt_departure_flow_by_class = {s: {"fast": {t: 0.0 for t in times}, "slow": {t: 0.0 for t in times}} for s in stations}
+    ev_station_waits = {s: {t: 0.0 for t in times} for s in ev_stations}
+    vt_departure_waits = {s: {"fast": {t: 0.0 for t in times}, "slow": {t: 0.0 for t in times}} for s in hybrid_stations}
+    vt_departure_flow_by_class = {s: {"fast": {t: 0.0 for t in times}, "slow": {t: 0.0 for t in times}} for s in hybrid_stations}
     while iteration < current_max_iter and iteration < max_total_iter:
         last_iteration = iteration + 1
         g_by_time = {t: g_series[min(len(g_series) - 1, idx)] for idx, t in enumerate(times)}
         tau = compute_road_times(arc_flows, arc_params, g_by_time, times)
         ev_station_waits = compute_station_waits(utilization, station_params, times)
         effective_prices = {
-            s: {t: electricity_price[s][t] + energy_surcharge[s][t] for t in times}
-            for s in stations
+            s: {t: electricity_price[s][t] + float(energy_surcharge.get(s, {}).get(t, 0.0)) for t in times}
+            for s in ev_stations
         }
         generated = generate_itineraries(data, tau, ev_station_waits, config)
         if generated:
@@ -1057,7 +1060,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 if it["id"] not in seen_ids:
                     itineraries.append(it)
                     seen_ids.add(it["id"])
-        inc_road, inc_station = build_incidence(itineraries, arcs, stations, times)
+        inc_road, inc_station = build_incidence(itineraries, arcs, ev_stations, times)
         costs = compute_itinerary_costs(
             itineraries,
             tau,
@@ -1190,7 +1193,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         for a in arcs:
             for t in times:
                 arc_flows[a][t] = (1.0 - phi) * arc_flows[a][t] + phi * x_new[a][t]
-        for s in stations:
+        for s in power_stations:
             for t in times:
                 utilization[s][t] = (1.0 - phi) * utilization[s][t] + phi * u_new[s][t]
         inflow_total, outflow_total = boundary_flows(
@@ -1219,13 +1222,13 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         if solver_requested != "highs":
             raise ValueError("config.shared_power_solver must be 'highs' (LP-only mode)")
 
-        shadow_prices: Dict[str, Dict[int, float | None]] = {s: {t: None for t in times} for s in stations}
-        shed_ev = {s: {t: 0.0 for t in times} for s in stations}
-        shed_vt = {s: {t: 0.0 for t in times} for s in stations}
+        shadow_prices: Dict[str, Dict[int, float | None]] = {s: {t: None for t in times} for s in power_stations}
+        shed_ev = {s: {t: 0.0 for t in times} for s in power_stations}
+        shed_vt = {s: {t: 0.0 for t in times} for s in power_stations}
         shared_power_residuals = {"INV3": 0.0}
-        B_vt_lp = {s: {t: 0.0 for t in times} for s in stations}
-        P_vt_lp = {s: {t: 0.0 for t in times} for s in stations}
-        heuristic_surcharge = {s: {t: 0.0 for t in times} for s in stations}
+        B_vt_lp = {s: {t: 0.0 for t in times} for s in power_stations}
+        P_vt_lp = {s: {t: 0.0 for t in times} for s in power_stations}
+        heuristic_surcharge = {s: {t: 0.0 for t in times} for s in power_stations}
 
         if surcharge_method != "shadow_lp":
             raise ValueError("Only surcharge_method='shadow_lp' is supported")
@@ -1238,7 +1241,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             shared_power_residuals,
             shared_power_lp_diag,
         ) = charging.solve_shared_power_inventory_lp(data, e_dep, ev_energy_kwh)
-        for s in stations:
+        for s in power_stations:
             B_vt_lp.setdefault(s, {t: 0.0 for t in times})
             P_vt_lp.setdefault(s, {t: 0.0 for t in times})
         diagnostics["shared_power_solver_used"] = charging.LAST_SHARED_POWER_SOLVER_USED
@@ -1249,11 +1252,11 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         lp_ok = diagnostics["shared_power_solver_used"] == "highs" and bool(diagnostics.get("lp_ok", False))
         fallback_used = diagnostics["shared_power_solver_used"] != "highs" or not lp_ok
 
-        vt_service_prob_target = {s: {t: 1.0 for t in times} for s in stations}
-        shed_ratio_map = {s: {t: 0.0 for t in times} for s in stations}
-        cap_binding_map = {s: {t: False for t in times} for s in stations}
+        vt_service_prob_target = {s: {t: 1.0 for t in times} for s in power_stations}
+        shed_ratio_map = {s: {t: 0.0 for t in times} for s in power_stations}
+        cap_binding_map = {s: {t: False for t in times} for s in power_stations}
 
-        for s in stations:
+        for s in power_stations:
             for t in times:
                 base_price = max(1.0e-6, float(electricity_price[s][t]))
                 cap, cap_mult_value, cap_abs_value, cap_mode = _compute_cap_values(base_price, config)
@@ -1279,14 +1282,14 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 vt_service_prob_target[s][t] = target_prob
                 shed_ratio_map[s][t] = shed_ratio
 
-        prev_surcharge = {s: {t: energy_surcharge[s][t] for t in times} for s in stations}
-        prev_raw = {s: {t: float(raw_surcharge[s][t]) for t in times} for s in stations}
+        prev_surcharge = {s: {t: energy_surcharge[s][t] for t in times} for s in power_stations}
+        prev_raw = {s: {t: float(raw_surcharge[s][t]) for t in times} for s in power_stations}
         alpha_override = config.get("surcharge_msa_alpha")
         alpha = float(alpha_override) if alpha_override is not None else 1.0 / (iteration + 1.0)
         alpha_vt = config.get("vt_reliability_alpha")
         alpha_vt = float(alpha_vt) if alpha_vt is not None else alpha
 
-        for s in stations:
+        for s in power_stations:
             for t in times:
                 candidate = (1.0 - alpha) * energy_surcharge[s][t] + alpha * raw_surcharge[s][t]
                 raw_thr = float(config.get("surcharge_decay_raw_threshold", 1.0e-3))
@@ -1395,19 +1398,19 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 }
 
         dprice = max(
-            abs(energy_surcharge[s][t] - prev_surcharge[s][t]) for s in stations for t in times
+            abs(energy_surcharge[s][t] - prev_surcharge[s][t]) for s in power_stations for t in times
         )
         dprice_raw = max(
-            abs(raw_surcharge[s][t] - prev_raw[s][t]) for s in stations for t in times
+            abs(raw_surcharge[s][t] - prev_raw[s][t]) for s in power_stations for t in times
         )
-        max_surcharge = max(energy_surcharge[s][t] for s in stations for t in times)
+        max_surcharge = max(energy_surcharge[s][t] for s in power_stations for t in times) if power_stations else 0.0
         diagnostics["dx_history"].append(dx)
         diagnostics["dn_history"].append(dn)
         diagnostics["dprice_history"].append(dprice)
         diagnostics["dprice_raw_history"].append(dprice_raw)
         diagnostics["max_surcharge_history"].append(max_surcharge)
 
-        peak_entries = [diagnostics["power_tightness"].get(s, {}).get(peak_t, {}) for s in stations]
+        peak_entries = [diagnostics["power_tightness"].get(s, {}).get(peak_t, {}) for s in power_stations]
         if peak_entries:
             bind_ratio = sum(1.0 for e in peak_entries if e.get("cap_binding")) / max(1, len(peak_entries))
             avg_vt_prob = sum(float(e.get("vt_service_prob", 1.0)) for e in peak_entries) / max(1, len(peak_entries))
@@ -1427,7 +1430,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "t": peak_t,
             "stations": {},
         }
-        for s in stations[:3]:
+        for s in power_stations[:3]:
             base_price = electricity_price[s][peak_t]
             surcharge = energy_surcharge[s][peak_t]
             snapshot["stations"][s] = {
@@ -1563,7 +1566,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         diagnostics["surcharge_history"].append(
             {
                 "iteration": iteration + 1,
-                "surcharge": {s: {t: energy_surcharge[s][t] for t in times} for s in stations},
+                "surcharge": {s: {t: energy_surcharge[s][t] for t in times} for s in power_stations},
             }
         )
         if len(diagnostics["surcharge_history"]) > 20:
@@ -1674,8 +1677,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         E, p_ch, y, charging_residuals, B_vt, P_vt, inv_residuals, _ = solve_charging(data, e_dep, d_vt_dep)
     else:
         E = {m: {t: 0.0 for t in times} for m in data["sets"]["vehicles"]}
-        p_ch = {m: {s: {t: 0.0 for t in times} for s in stations} for m in data["sets"]["vehicles"]}
-        y = {m: {s: {t: 0 for t in times} for s in stations} for m in data["sets"]["vehicles"]}
+        p_ch = {m: {s: {t: 0.0 for t in times} for s in ev_stations} for m in data["sets"]["vehicles"]}
+        y = {m: {s: {t: 0 for t in times} for s in ev_stations} for m in data["sets"]["vehicles"]}
         charging_residuals = {"SKIPPED": 0.0}
         B_vt = B_vt_lp or {}
         if lp_ok and P_vt_lp:
@@ -1693,7 +1696,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
 
     power_violation = 0.0
     power_mode = str(config.get("power_violation_mode", "net"))
-    for s in stations:
+    for s in power_stations:
         for t in times:
             if run_dispatch:
                 total_power = sum(p_ch[m][s][t] for m in data["sets"]["vehicles"])
@@ -1714,7 +1717,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     g_used_by_time = {t: g_series[min(idx, len(g_series) - 1)] for idx, t in enumerate(times)}
     times_ext = list(times) + [times[-1] + 1] if times else []
     B_vt_report: Dict[str, Dict[int, float]] = {}
-    for s in stations:
+    for s in power_stations:
         B_vt_report[s] = {}
         for idx, t_ext in enumerate(times_ext):
             if B_vt_lp is not None and s in B_vt_lp and t_ext in B_vt_lp[s]:
@@ -1736,7 +1739,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             cbd_tau[arc][t] = float(params["tau0"]) * g_t * theta
 
     positive_mu_points = 0
-    for s in stations:
+    for s in power_stations:
         for t in times:
             if float(((shadow_prices or {}).get(s, {}).get(t, 0.0) or 0.0)) > 1.0e-9:
                 positive_mu_points += 1
@@ -1744,7 +1747,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     terminal_soc_by_station: Dict[str, Dict[str, float | bool]] = {}
     storage_energy_totals_by_station: Dict[str, Dict[str, float]] = {}
     storage_params = data.get("parameters", {}).get("vertiport_storage", {})
-    for s in stations:
+    for s in power_stations:
         b_cfg = storage_params.get(s, {})
         b_init = float(b_cfg.get("B_init", b_cfg.get("B_min", 0.0)))
         b_target = float(charging._terminal_soc_target(b_cfg, data.get("config", {}), s))
@@ -1775,7 +1778,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     diagnostics["terminal_soc_by_station"] = terminal_soc_by_station
     diagnostics["storage_energy_totals_by_station"] = storage_energy_totals_by_station
     diagnostics["storage_soc_trajectory_kwh"] = B_vt_report
-    diagnostics["storage_charge_power_kw"] = {s: {t: float((P_vt_lp or {}).get(s, {}).get(t, 0.0)) for t in times} for s in stations}
+    diagnostics["storage_charge_power_kw"] = {s: {t: float((P_vt_lp or {}).get(s, {}).get(t, 0.0)) for t in times} for s in power_stations}
 
     if positive_mu_points == 0 and float(diagnostics.get("aircraft_binding_count", 0.0)) > 0:
         diagnostics["bottleneck_summary"] = "aircraft_inventory_or_turnaround_dominant_not_shared_power"

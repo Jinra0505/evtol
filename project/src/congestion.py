@@ -76,7 +76,7 @@ def compute_vt_departure_waits(
     - Internal queue loads and capacities are handled in departures/period.
     - Wait outputs are time in the same unit as itinerary travel time (typically hours).
     """
-    stations = data.get("sets", {}).get("stations", [])
+    stations = data.get("sets", {}).get("hybrid_stations", data.get("sets", {}).get("stations", []))
     station_params = data.get("parameters", {}).get("stations", {})
     vt_caps = data.get("parameters", {}).get("vt_departure_capacity", {})
     vt_caps_total = data.get("parameters", {}).get("vt_departure_capacity_total", {})

@@ -31,6 +31,13 @@ class LPFailed(RuntimeError):
         super().__init__(f"Shared power HiGHS LP failed: {payload.get('message', 'unknown error')}")
 
 
+def _hybrid_station_list(data: Dict[str, Any]) -> list[str]:
+    hs = data.get("sets", {}).get("hybrid_stations")
+    if isinstance(hs, list) and hs:
+        return [str(x) for x in hs]
+    return [str(x) for x in data.get("sets", {}).get("stations", [])]
+
+
 
 
 def _terminal_soc_target(storage_cfg: Dict[str, Any], config: Dict[str, Any], station: str) -> float:
@@ -67,7 +74,7 @@ def compute_station_loads_from_flows(
     - E_vt_req[s][t], P_vt_req_kw_energy[s][t], P_vt_req_kw_grid[s][t]
     - P_total_req[s][t]
     """
-    stations = data["sets"]["stations"]
+    stations = _hybrid_station_list(data)
     delta_t = float(data["meta"]["delta_t"])
     station_params = data["parameters"]["stations"]
 
@@ -125,7 +132,7 @@ def _solve_shared_power_core_gurobi(
     LAST_SHARED_SOLVER_USED = "gurobi"
     LAST_SHARED_POWER_SOLVER_USED = "gurobi"
 
-    stations = data["sets"]["stations"]
+    stations = _hybrid_station_list(data)
     delta_t = data["meta"]["delta_t"]
     station_params = data["parameters"]["stations"]
     prices = data["parameters"]["electricity_price"]
@@ -264,7 +271,7 @@ def solve_shared_power_inventory_highs(
     LAST_SHARED_SOLVER_USED = "highs"
     LAST_SHARED_POWER_SOLVER_USED = "highs"
 
-    stations = data["sets"]["stations"]
+    stations = _hybrid_station_list(data)
     delta_t = float(data["meta"]["delta_t"])
     station_params = data["parameters"]["stations"]
     prices = data["parameters"]["electricity_price"]
@@ -536,7 +543,7 @@ def _solve_shared_power_core_heuristic(
     global LAST_SHARED_SOLVER_USED, LAST_SHARED_POWER_SOLVER_USED
     LAST_SHARED_SOLVER_USED = "heuristic"
     LAST_SHARED_POWER_SOLVER_USED = "heuristic"
-    stations = data["sets"]["stations"]
+    stations = _hybrid_station_list(data)
     delta_t = float(data["meta"]["delta_t"])
     station_params = data["parameters"]["stations"]
     storage_params = data["parameters"].get("vertiport_storage", {})
@@ -642,7 +649,7 @@ def solve_shared_power_inventory_lp(
     Dict[str, float],
 ]:
     times = data["sets"]["time"]
-    stations = set(data["sets"]["stations"])
+    stations = set(_hybrid_station_list(data))
     diagnostics_ref = data.setdefault("diagnostics_runtime", {})
     try:
         B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals, lp_diag = _solve_shared_power_core(data, times, e_dep, ev_energy)
@@ -692,7 +699,7 @@ def solve_charging(
     LAST_SOLVER_USED = "gurobi"
     times = data["sets"]["time"]
     vehicles = data["sets"]["vehicles"]
-    stations = data["sets"]["stations"]
+    stations = _hybrid_station_list(data)
     delta_t = data["meta"]["delta_t"]
     charging_params = data["parameters"]["charging"]
     avail = data["parameters"]["avail"]
@@ -837,7 +844,7 @@ def _solve_charging_pulp(
 
     times = data["sets"]["time"]
     vehicles = data["sets"]["vehicles"]
-    stations = data["sets"]["stations"]
+    stations = _hybrid_station_list(data)
     delta_t = data["meta"]["delta_t"]
     charging_params = data["parameters"]["charging"]
     avail = data["parameters"]["avail"]
@@ -916,7 +923,7 @@ def compute_charging_residuals(
 ) -> Dict[str, float]:
     times = data["sets"]["time"]
     vehicles = data["sets"]["vehicles"]
-    stations = data["sets"]["stations"]
+    stations = _hybrid_station_list(data)
     delta_t = data["meta"]["delta_t"]
     charging_params = data["parameters"]["charging"]
     avail = data["parameters"]["avail"]

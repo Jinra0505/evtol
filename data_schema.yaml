@@ -7,7 +7,10 @@
     "config.use_generator",
     "sets.time",
     "sets.groups",
+    "sets.arcs",
     "sets.stations",
+    "sets.ev_stations",
+    "sets.hybrid_stations",
     "parameters.q",
     "parameters.VOT",
     "parameters.lambda",
@@ -20,6 +23,7 @@
     "parameters.vt_departure_capacity_fast",
     "parameters.vt_pax_per_departure_fast",
     "parameters.vt_pax_per_departure_slow",
+    "parameters.vt_aircraft_init_by_station",
     "itineraries"
   ]
 }
