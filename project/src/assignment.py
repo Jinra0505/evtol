@@ -267,7 +267,13 @@ def logit_assignment(
     ev_reliability_gamma: float = 0.0,
     vt_service_prob_skip_below: float = 0.0,
     ev_service_prob_skip_below: float = 0.0,
+    fail_on_infeasible_demand: bool = False,
 ) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Any]]:
+    """Multinomial-logit assignment.
+
+    Demand/flows are passenger demand in pax/period. If no feasible alternatives exist,
+    demand is recorded to ``unserved_demand`` unless ``fail_on_infeasible_demand`` is True.
+    """
     all_groups = sorted({g for od_groups in demand.values() for g in od_groups.keys()})
     flows: Dict[str, Dict[str, Dict[int, float]]] = {
         it["id"]: {group: {t: 0.0 for t in times} for group in all_groups} for it in itineraries
@@ -299,14 +305,26 @@ def logit_assignment(
             for t in times:
                 alts = itineraries_by_od.get(od_key, [])
                 if not alts:
-                    raise ValueError(f"No itineraries for OD {od_key}")
+                    if fail_on_infeasible_demand:
+                        raise ValueError(f"No itineraries for OD {od_key}")
+                    unserved_demand.setdefault(od_key, {}).setdefault(group, {})[t] = float(time_map.get(t, 0.0))
+                    unserved_demand_total += float(time_map.get(t, 0.0))
+                    unserved_cases_count += 1
+                    continue
                 available_alts = []
                 for it in alts:
                     if is_evtol_itinerary(it) and _value_by_time(it.get("flight_time", {}), t, 0.0) <= 0.0:
                         continue
                     available_alts.append(it)
                 if not available_alts:
-                    raise ValueError(f"No available itineraries for OD {od_key} at t={t}")
+                    if fail_on_infeasible_demand:
+                        raise ValueError(f"No available itineraries for OD {od_key} at t={t}")
+                    total_demand = float(time_map.get(t, 0.0))
+                    if total_demand > 0.0:
+                        unserved_demand.setdefault(od_key, {}).setdefault(group, {})[t] = total_demand
+                        unserved_demand_total += total_demand
+                        unserved_cases_count += 1
+                    continue
 
                 feasible_alts = []
                 total_demand = float(time_map.get(t, 0.0))
@@ -542,7 +560,20 @@ def aggregate_vt_departure_flow_by_class(
     itineraries: List[Dict[str, Any]],
     flows: Dict[str, Dict[str, Dict[int, float]]],
     times: List[int],
+    *,
+    output_unit: str = "pax",
+    vt_pax_per_departure_fast: float = 2.0,
+    vt_pax_per_departure_slow: float = 4.0,
 ) -> Dict[str, Dict[str, Dict[int, float]]]:
+    """Aggregate eVTOL departures by station and service class.
+
+    Args:
+        flows: passenger flow map in pax/period.
+        output_unit: ``'pax'`` (default) or ``'departures'``.
+
+    Returns:
+        Nested dict station -> class -> time -> value in requested unit.
+    """
     out: Dict[str, Dict[str, Dict[int, float]]] = {}
     for it in itineraries:
         if not is_evtol_itinerary(it):
@@ -552,9 +583,13 @@ def aggregate_vt_departure_flow_by_class(
             continue
         cls = get_evtol_service_class(it)
         out.setdefault(dep_station, {}).setdefault(cls, {t: 0.0 for t in times})
+        pax_per_dep = vt_pax_per_departure_fast if cls == "fast" else vt_pax_per_departure_slow
+        pax_per_dep = max(1.0e-6, float(pax_per_dep))
         for _, time_map in flows.get(it.get("id"), {}).items():
             for t in times:
-                out[dep_station][cls][t] += float(time_map.get(t, 0.0))
+                pax_flow = float(time_map.get(t, 0.0))
+                val = pax_flow if output_unit == "pax" else pax_flow / pax_per_dep
+                out[dep_station][cls][t] += val
     for dep in out:
         out[dep].setdefault("fast", {t: 0.0 for t in times})
         out[dep].setdefault("slow", {t: 0.0 for t in times})

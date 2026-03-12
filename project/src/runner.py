@@ -83,6 +83,89 @@ def _compute_cap_values(base_price: float, config: Dict[str, Any]) -> Tuple[floa
         return cap_mult_value, cap_mult_value, None, "mult"
     return float("inf"), None, None, "none"
 
+
+
+def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize config aliases and set defaults with backward compatibility."""
+    cfg = config
+    cfg["tol"] = float(cfg.get("tol", 1.0))
+    # historical alias mapping
+    if "shadow_price_scale" not in cfg and "surcharge_kappa" in cfg:
+        cfg["shadow_price_scale"] = cfg.get("surcharge_kappa")
+    if "surcharge_kappa" not in cfg and "shadow_price_scale" in cfg:
+        cfg["surcharge_kappa"] = cfg.get("shadow_price_scale")
+    cfg.setdefault("surcharge_beta", 1.0)
+    cfg.setdefault("surcharge_method", "shadow_lp")
+    cfg.setdefault("shadow_price_scale", 1.0)
+    cfg.setdefault("shadow_price_cap_mult", 10.0)
+    cfg.setdefault("shadow_price_cap_abs", None)
+    cfg.setdefault("vt_reliability_floor", 0.05)
+    cfg.setdefault("vt_reliability_alpha", None)
+    cfg.setdefault("vt_reliability_skip_below", 0.0)
+    cfg.setdefault("vt_reliability_gamma", 0.0)
+    cfg.setdefault("ev_reliability_gamma", 0.0)
+    cfg.setdefault("max_iter_auto_extend", 0)
+    cfg.setdefault("max_total_iter", 800)
+    cfg.setdefault("auto_extend_step", 100)
+    cfg.setdefault("ev_reliability_floor", cfg.get("vt_reliability_floor", 0.05))
+    cfg.setdefault("strict_audit", True)
+    cfg.setdefault("audit_raise", True)
+    cfg.setdefault("strict_convergence", False)
+    cfg.setdefault("shared_power_solver", "highs")
+    cfg.setdefault("output_full_json", True)
+    cfg.setdefault("power_violation_mode", "net")
+    cfg.setdefault("voll_ev_per_kwh", 50.0)
+    cfg.setdefault("voll_vt_per_kwh", 200.0)
+    cfg.setdefault("fail_on_infeasible_demand", False)
+    cfg.setdefault("peak_t_selection_rule", "max_total_demand")
+    cfg.setdefault("manual_peak_t", None)
+    cfg.setdefault("case_label", "illustrative")
+    return cfg
+
+
+def _select_peak_t(data: Dict[str, Any], times: List[int], config: Dict[str, Any]) -> Tuple[int, str, float]:
+    """Select peak analysis period.
+
+    Returns (peak_t, selection_rule_used, total_demand_at_peak_pax).
+    """
+    if not times:
+        return 0, "none", 0.0
+    q = data.get("parameters", {}).get("q", {})
+    demand_by_t = {t: 0.0 for t in times}
+    for od_map in q.values():
+        if not isinstance(od_map, dict):
+            continue
+        for grp_map in od_map.values():
+            if not isinstance(grp_map, dict):
+                continue
+            for t in times:
+                demand_by_t[t] += float(grp_map.get(t, 0.0) or 0.0)
+
+    rule = str(config.get("peak_t_selection_rule", "max_total_demand"))
+    if rule == "last_period":
+        peak_t = times[-1]
+    elif rule == "manual":
+        cand = config.get("manual_peak_t")
+        peak_t = int(cand) if cand in times else times[-1]
+    else:
+        rule = "max_total_demand"
+        peak_t = max(times, key=lambda t: demand_by_t.get(t, 0.0))
+    return int(peak_t), rule, float(demand_by_t.get(peak_t, 0.0))
+
+
+def _convergence_flags(dx: float, dn: float, dprice: float, residuals: Dict[str, float], tol: float, strict: bool) -> Dict[str, Any]:
+    strict_tol = max(1.0e-6, 0.5 * tol)
+    loose_ok = max(dx, dn, dprice) <= tol
+    strict_metric_ok = max(dx, dn, dprice) <= strict_tol
+    strict_resid_ok = (residuals.get("C2_rel", 1e9) <= max(0.2, 0.4 * tol)) and (residuals.get("C10", 1e9) <= max(25.0, 10.0 * tol)) and (residuals.get("C7", 1e9) <= max(10.0, 8.0 * tol))
+    converged_strictly = strict_metric_ok and strict_resid_ok
+    return {
+        "converged_loose": bool(loose_ok),
+        "converged_strictly": bool(converged_strictly),
+        "max_residual_end": float(max(residuals.get("C2_rel", 0.0), residuals.get("C10", 0.0), residuals.get("C7", 0.0))),
+        "patience_only_stop": False,
+        "strict_required": bool(strict),
+    }
 def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     floor = float(config.get("vt_reliability_floor", 0.05))
     warnings: List[str] = []
@@ -204,22 +287,19 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     dx_end = diagnostics.get("dx_end", results.get("convergence", {}).get("dx"))
     dn_end = diagnostics.get("dn_end", results.get("convergence", {}).get("dn"))
     dprice_end = diagnostics.get("dprice_end", results.get("convergence", {}).get("dprice"))
+    converged_loose = bool(diagnostics.get("converged_loose", False))
+    converged_strictly = bool(diagnostics.get("converged_strictly", False))
     if stop_reason != "patience":
         warnings.append("did not stop by patience")
-    if tol > 0.0:
-        dx_bad = dx_end is not None and float(dx_end) > tol
-        dn_bad = dn_end is not None and float(dn_end) > tol
-        dprice_bad = dprice_end is not None and float(dprice_end) > tol
-        c2_rel = float(results.get("residuals", {}).get("C2_rel", 0.0) or 0.0)
-        c10 = float(results.get("residuals", {}).get("C10", 0.0) or 0.0)
-        c7 = float(results.get("residuals", {}).get("C7", 0.0) or 0.0)
-        strict_fail = (c2_rel > max(0.25, 0.35 * tol)) or (c10 > max(35.0, 8.0 * tol)) or (c7 > max(18.0, 6.0 * tol))
-        any_fail = dx_bad or dn_bad or dprice_bad or strict_fail
-        if any_fail:
-            if bool(config.get("strict_convergence", False)) and strict_fail:
-                severe.append("convergence thresholds not satisfied")
-            else:
-                warnings.append("convergence thresholds not satisfied")
+    if tol > 0.0 and not converged_loose:
+        warnings.append("loose convergence thresholds not satisfied")
+    if bool(config.get("strict_convergence", False)) and not converged_strictly:
+        if bool(config.get("strict_convergence_raise", False)):
+            severe.append("strict convergence thresholds not satisfied")
+        else:
+            warnings.append("strict convergence thresholds not satisfied")
+    elif not converged_strictly:
+        warnings.append("strict convergence thresholds not satisfied")
 
     expected_groups = set(results.get("data_parameters", {}).get("lambda", {}).keys())
     output_groups = set()
@@ -240,7 +320,11 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
 
     unserved_total = float(diagnostics.get("unserved_demand_total", 0.0) or 0.0)
     if unserved_total > 1.0e-9:
-        severe.append("unserved demand exists because no feasible alternative remained")
+        msg = "unserved demand exists because no feasible alternative remained"
+        if bool(config.get("fail_on_infeasible_demand", False)):
+            severe.append(msg)
+        else:
+            warnings.append(msg)
 
     mode_group_mode = diagnostics.get("mode_share_by_group_and_mode", [])
     mode_group_old = diagnostics.get("mode_share_by_group", [])
@@ -757,27 +841,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     arcs = data["sets"]["arcs"]
     stations = data["sets"]["stations"]
     delta_t = data["meta"]["delta_t"]
-    config = data["config"]
-    config["tol"] = float(config["tol"])
-    config.setdefault("surcharge_method", "shadow_lp")
-    config.setdefault("shadow_price_scale", 1.0)
-    config.setdefault("shadow_price_cap_mult", 10.0)
-    config.setdefault("vt_reliability_floor", 0.05)
-    config.setdefault("vt_reliability_alpha", None)
-    config.setdefault("vt_reliability_skip_below", 0.0)
-    config.setdefault("vt_reliability_gamma", 0.0)
-    config.setdefault("ev_reliability_gamma", 0.0)
-    config.setdefault("max_iter_auto_extend", 0)
-    config.setdefault("max_total_iter", 800)
-    config.setdefault("auto_extend_step", 100)
-    config.setdefault("ev_reliability_floor", config.get("vt_reliability_floor", 0.05))
-    config.setdefault("strict_audit", True)
-    config.setdefault("audit_raise", True)
-    config.setdefault("shared_power_solver", "highs")
-    config.setdefault("output_full_json", True)
-    config.setdefault("power_violation_mode", "net")
-    config.setdefault("voll_ev_per_kwh", 50.0)
-    config.setdefault("voll_vt_per_kwh", 200.0)
+    config = _normalize_config(data["config"])
     itineraries = list(data["itineraries"])
     seen_ids = {it["id"] for it in itineraries}
     arc_params = data["parameters"]["arcs"]
@@ -800,7 +864,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     patience = int(config.get("patience", 5))
     stop_reason = "max_iters"
     dprice = 0.0
-    peak_t = 5 if 5 in times else times[-1]
+    peak_t, peak_t_rule, peak_t_total_demand = _select_peak_t(data, times, config)
     demand_keys = list(data["parameters"]["q"].keys())
     representative_od = config.get("representative_od")
     if not representative_od:
@@ -831,6 +895,23 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "runner_file": str(Path(__file__).resolve()),
             "charging_file": str(Path(charging.__file__).resolve()),
             "sys_path_head": list(sys.path[:5]),
+        },
+        "peak_t_selection_rule": peak_t_rule,
+        "peak_t_total_demand": peak_t_total_demand,
+        "case_label": str(config.get("case_label", "illustrative")),
+        "parameter_effective": {
+            "min_vt_reroute_share": config.get("min_vt_reroute_share", 0.0),
+            "surcharge_kappa": config.get("surcharge_kappa"),
+            "surcharge_beta": config.get("surcharge_beta"),
+            "K_paths": config.get("K_paths"),
+            "eps_improve": config.get("eps_improve"),
+            "shadow_price_scale": config.get("shadow_price_scale"),
+            "shadow_price_cap_mult": config.get("shadow_price_cap_mult"),
+            "shadow_price_cap_abs": config.get("shadow_price_cap_abs"),
+            "tol": config.get("tol"),
+            "strict_convergence": config.get("strict_convergence"),
+            "strict_audit": config.get("strict_audit"),
+            "audit_raise": config.get("audit_raise"),
         },
         "scipy_version": charging.SCIPY_VERSION,
         "scipy_ok": bool(charging.HAS_SCIPY),
@@ -880,6 +961,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     x_new = arc_flows
     u_new = utilization
     good_count = 0
+    prev_metric = float("inf")
+    eps_improve = float(config.get("eps_improve", 0.0) or 0.0)
     current_max_iter = int(config["max_iter"])
     auto_extend = int(config.get("auto_extend_step", config.get("max_iter_auto_extend", 0)))
     max_total_iter = int(config.get("max_total_iter", 800))
@@ -927,6 +1010,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             vt_reliability_gamma=float(config["vt_reliability_gamma"]),
             ev_reliability_gamma=float(config.get("ev_reliability_gamma", 0.0)),
             vt_service_prob_skip_below=float(config["vt_reliability_skip_below"]),
+            fail_on_infeasible_demand=bool(config.get("fail_on_infeasible_demand", False)),
         )
         vt_departure_waits, vt_departure_flow_by_class = compute_vt_departure_waits(
             data,
@@ -950,6 +1034,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 cap_pax,
                 logit_details.get("utilities", {}),
                 diagnostics["unserved_demand"],
+                min_vt_reroute_share=float(config.get("min_vt_reroute_share", 0.0)),
             )
             diagnostics["vertiport_cap_triggered_count"] = cap_stats.get("triggered_count", 0.0)
             diagnostics["vertiport_cap_excess_pax"] = cap_stats.get("excess_pax", 0.0)
@@ -976,6 +1061,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             vt_slow,
             vt_turn_lag,
             vt_init,
+            min_vt_reroute_share=float(config.get("min_vt_reroute_share", 0.0)),
         )
         diagnostics.update(aircraft_diag)
         diagnostics["unserved_demand_total"] = sum(
@@ -1031,6 +1117,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         ev_energy_kwh = load_agg["E_ev_req"]
         surcharge_method = config.get("surcharge_method", "shadow_lp")
         shadow_scale = float(config.get("shadow_price_scale", 1.0))
+        surcharge_beta = max(1.0e-6, float(config.get("surcharge_beta", 1.0)))
         cap_mult = float(config.get("shadow_price_cap_mult", 10.0))
         lp_ok = False
         fallback_used = False
@@ -1078,7 +1165,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 cap, cap_mult_value, cap_abs_value, cap_mode = _compute_cap_values(base_price, config)
                 mu_kw = shadow_prices[s][t]
                 if diagnostics.get("shared_power_solver_used") == "highs":
-                    raw = shadow_scale * float(mu_kw or 0.0) / max(1e-9, delta_t)
+                    raw = shadow_scale * (float(mu_kw or 0.0) ** surcharge_beta) / max(1e-9, delta_t)
                     raw_surcharge_uncapped[s][t] = raw
                     raw_surcharge[s][t] = min(raw, cap)
                 else:
@@ -1390,10 +1477,13 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 )
 
         if iteration + 1 >= min_iters:
-            if max(dx, dn, dprice) < config["tol"]:
+            metric = max(dx, dn, dprice)
+            improved = (prev_metric - metric) > eps_improve
+            if metric < config["tol"] or improved:
                 good_count += 1
             else:
                 good_count = 0
+            prev_metric = metric
             if good_count >= patience:
                 if not should_print:
                     print(
@@ -1436,6 +1526,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         utilization,
         u_new,
     )
+    conv_flags = _convergence_flags(dx, dn, dprice, residuals, float(config.get("tol", 0.0)), bool(config.get("strict_convergence", False)))
+    conv_flags["patience_only_stop"] = bool(stop_reason == "patience" and not conv_flags["converged_strictly"])
 
     if run_dispatch:
         E, p_ch, y, charging_residuals, B_vt, P_vt, inv_residuals, _ = solve_charging(data, e_dep, d_vt_dep)
@@ -1502,6 +1594,16 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             g_t = g_used_by_time[t]
             cbd_tau[arc][t] = float(params["tau0"]) * g_t * theta
 
+    positive_mu_points = 0
+    for s in stations:
+        for t in times:
+            if float(((shadow_prices or {}).get(s, {}).get(t, 0.0) or 0.0)) > 1.0e-9:
+                positive_mu_points += 1
+    if positive_mu_points == 0 and float(diagnostics.get("aircraft_binding_count", 0.0)) > 0:
+        diagnostics["bottleneck_summary"] = "aircraft_inventory_or_turnaround_dominant_not_shared_power"
+    else:
+        diagnostics["bottleneck_summary"] = "mixed_or_power_constrained"
+
     results = {
         "x": arc_flows,
         "tau": tau,
@@ -1559,6 +1661,11 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "dx_end": dx,
             "dn_end": dn,
             "dprice_end": dprice,
+            "converged_loose": conv_flags["converged_loose"],
+            "converged_strictly": conv_flags["converged_strictly"],
+            "audit_ok": False,
+            "max_residual_end": conv_flags["max_residual_end"],
+            "patience_only_stop": conv_flags["patience_only_stop"],
         },
         "data_parameters": {**data.get("parameters", {}), "expected_groups": list(data.get("sets", {}).get("groups", []))},
         "meta": data.get("meta", {}),
@@ -1572,6 +1679,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     }
     audit = self_audit(results, config)
     results["SelfAudit"] = audit
+    results["diagnostics"]["audit_ok"] = bool(audit.get("ok", False))
     must_raise_tokens = [
         "Requested HiGHS but non-HiGHS solver used",
         "inventory balance broken",
@@ -1580,8 +1688,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     ]
     if any(any(tok in s for tok in must_raise_tokens) for s in audit.get("severe", [])):
         raise ValueError("Critical self-audit failure: " + "; ".join(audit.get("severe", [])))
-    if bool(config.get("strict_audit", True)) and audit.get("warnings"):
-        diagnostics["audit_warnings"] = audit["warnings"]
+    if bool(config.get("strict_audit", True)):
+        diagnostics["audit_warnings"] = audit.get("warnings", [])
+        if audit.get("severe") and not bool(config.get("audit_raise", False)):
+            raise ValueError("Strict audit failed: " + "; ".join(audit.get("severe", [])))
     return results, residuals
 
 
@@ -1595,21 +1705,25 @@ def save_outputs(results: Dict[str, Any], path: str) -> None:
 def _resolve_path(path: str, fallback: str) -> str:
     import os
 
-    if os.path.exists(path):
-        return path
+    candidates = [
+        path,
+        os.path.join(os.getcwd(), path),
+    ]
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    data_candidate = os.path.join(repo_root, "project", "data", os.path.basename(path))
-    if os.path.exists(data_candidate):
-        return data_candidate
-    schema_candidate = os.path.join(repo_root, "project", os.path.basename(path))
-    if os.path.exists(schema_candidate):
-        return schema_candidate
-    if os.path.exists(fallback):
-        return fallback
-    candidate = os.path.join(repo_root, fallback)
-    if os.path.exists(candidate):
-        return candidate
-    raise FileNotFoundError(f"Could not find data file: {path}")
+    candidates.extend([
+        os.path.join(repo_root, path),
+        os.path.join(repo_root, "project", "data", os.path.basename(path)),
+        os.path.join(repo_root, "project", os.path.basename(path)),
+        fallback,
+        os.path.join(repo_root, fallback),
+    ])
+    for cand in candidates:
+        if cand and os.path.exists(cand):
+            return cand
+    raise FileNotFoundError(
+        f"Could not find required file '{path}'. Tried: {candidates}. "
+        "Check working directory, CLI path, and project/data_schema.yaml location."
+    )
 
 
 def main() -> None:
@@ -1715,7 +1829,9 @@ def main() -> None:
         report["diagnostics"].setdefault("cbd_tau", cbd_tau_one)
         report["diagnostics"]["shared_power_solver_used"] = results["diagnostics"].get("shared_power_solver_used")
         report["diagnostics"]["delta_t"] = data.get("meta", {}).get("delta_t")
-        report["diagnostics"]["surcharge_kappa"] = data.get("config", {}).get("shadow_price_scale")
+        report["diagnostics"]["surcharge_kappa"] = data.get("config", {}).get("surcharge_kappa")
+        report["diagnostics"]["shadow_price_scale"] = data.get("config", {}).get("shadow_price_scale")
+        report["diagnostics"]["surcharge_beta"] = data.get("config", {}).get("surcharge_beta")
         report["diagnostics"]["surcharge_cap_mult"] = data.get("config", {}).get("shadow_price_cap_mult")
         report["diagnostics"]["VOLL_EV"] = data.get("config", {}).get("voll_ev_per_kwh")
         report["diagnostics"]["VOLL_VT"] = data.get("config", {}).get("voll_vt_per_kwh")

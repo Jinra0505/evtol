@@ -46,6 +46,12 @@ def compute_station_waits(
     station_params: Dict[str, Dict[str, float]],
     times: List[int],
 ) -> Dict[str, Dict[int, float]]:
+    """EV station waiting-time proxy.
+
+    ``utilization`` should be EV-related vehicle charging demand proxy per period
+    (not passenger demand). This is an empirical BPR-style proxy rather than a
+    rigorous queueing model.
+    """
     waits = {s: {} for s in station_params}
     for station, params in station_params.items():
         cap = _safe_den(params.get("cap_stall", 0))
@@ -63,11 +69,21 @@ def compute_vt_departure_waits(
     times: List[int],
     config: Dict[str, Any],
 ) -> Tuple[Dict[str, Dict[str, Dict[int, float]]], Dict[str, Dict[str, Dict[int, float]]]]:
+    """Compute class-specific eVTOL departure waits.
+
+    Units:
+    - ``flows`` are passenger flows (pax/period).
+    - Internal queue loads and capacities are handled in departures/period.
+    - Wait outputs are time in the same unit as itinerary travel time (typically hours).
+    """
     stations = data.get("sets", {}).get("stations", [])
     station_params = data.get("parameters", {}).get("stations", {})
     vt_caps = data.get("parameters", {}).get("vt_departure_capacity", {})
     vt_caps_total = data.get("parameters", {}).get("vt_departure_capacity_total", {})
     vt_caps_fast = data.get("parameters", {}).get("vt_departure_capacity_fast", {})
+
+    pax_fast = float(data.get("parameters", {}).get("vt_pax_per_departure_fast", 2.0) or 2.0)
+    pax_slow = float(data.get("parameters", {}).get("vt_pax_per_departure_slow", 4.0) or 4.0)
 
     a_fast = float(config.get("vt_queue_a_fast", 1.0))
     a_slow = float(config.get("vt_queue_a_slow", 1.5))
@@ -75,8 +91,17 @@ def compute_vt_departure_waits(
     g_slow = float(config.get("vt_queue_gamma_slow", 2.0))
     w0_fast = float(config.get("vt_queue_w0_fast", 0.1))
     w0_slow = float(config.get("vt_queue_w0_slow", 0.2))
+    spill_ratio = float(config.get("vt_fast_overflow_to_slow_ratio", 0.5))
+    enforce_fast_le_slow = bool(config.get("vt_enforce_fast_le_slow", False))
 
-    dep_flows = aggregate_vt_departure_flow_by_class(itineraries, flows, times)
+    dep_flows = aggregate_vt_departure_flow_by_class(
+        itineraries,
+        flows,
+        times,
+        output_unit="departures",
+        vt_pax_per_departure_fast=pax_fast,
+        vt_pax_per_departure_slow=pax_slow,
+    )
     for s in stations:
         dep_flows.setdefault(s, {}).setdefault("fast", {t: 0.0 for t in times})
         dep_flows.setdefault(s, {}).setdefault("slow", {t: 0.0 for t in times})
@@ -98,11 +123,8 @@ def compute_vt_departure_waits(
             cap_fast = min(_safe_den(cap_fast), cap_total)
             cap_slow = _safe_den(max(cap_total - cap_fast, 1.0e-6))
 
-            # Priority-lane approximation with explicit overflow bookkeeping.
-            # fast<=slow guard is still applied below, but fast overflow should increase slow pressure.
             q_fast_overflow = max(0.0, q_fast - cap_fast)
-            overflow_to_slow = 0.65 * q_fast_overflow
-            q_slow_eff = q_slow + overflow_to_slow
+            q_slow_eff = q_slow + max(0.0, spill_ratio) * q_fast_overflow
 
             w_fast = max(0.0, w0_fast + a_fast * (q_fast / max(cap_fast, 1.0e-6)) ** g_fast)
             w_slow = max(0.0, w0_slow + a_slow * (q_slow_eff / cap_slow) ** g_slow)
@@ -110,9 +132,9 @@ def compute_vt_departure_waits(
                 w_fast = 0.0
             if math.isnan(w_slow) or math.isinf(w_slow):
                 w_slow = 0.0
-            # In normal service design, enforce a soft fast<=slow wait relationship.
-            if w_fast > w_slow:
-                w_fast = max(w0_fast, 0.95 * w_slow)
+            # Optional policy-style monotonicity guard.
+            if enforce_fast_le_slow and w_fast > w_slow:
+                w_fast = max(w0_fast, w_slow)
             waits[s]["fast"][t] = float(w_fast)
             waits[s]["slow"][t] = float(w_slow)
 
