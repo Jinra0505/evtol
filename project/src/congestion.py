@@ -98,10 +98,11 @@ def compute_vt_departure_waits(
             cap_fast = min(_safe_den(cap_fast), cap_total)
             cap_slow = _safe_den(max(cap_total - cap_fast, 1.0e-6))
 
-            # Priority-lane approximation: fast queue uses its own reserved capacity and does not
-            # fully inherit slow-class congestion; slow queue receives spillover from fast overflow.
-            q_fast_over = max(0.0, q_fast - cap_fast)
-            q_slow_eff = q_slow + 0.5 * q_fast_over
+            # Priority-lane approximation with explicit overflow bookkeeping.
+            # fast<=slow guard is still applied below, but fast overflow should increase slow pressure.
+            q_fast_overflow = max(0.0, q_fast - cap_fast)
+            overflow_to_slow = 0.65 * q_fast_overflow
+            q_slow_eff = q_slow + overflow_to_slow
 
             w_fast = max(0.0, w0_fast + a_fast * (q_fast / max(cap_fast, 1.0e-6)) ** g_fast)
             w_slow = max(0.0, w0_slow + a_slow * (q_slow_eff / cap_slow) ** g_slow)
@@ -109,7 +110,7 @@ def compute_vt_departure_waits(
                 w_fast = 0.0
             if math.isnan(w_slow) or math.isinf(w_slow):
                 w_slow = 0.0
-            # In normal service design fast should not systematically exceed slow.
+            # In normal service design, enforce a soft fast<=slow wait relationship.
             if w_fast > w_slow:
                 w_fast = max(w0_fast, 0.95 * w_slow)
             waits[s]["fast"][t] = float(w_fast)
