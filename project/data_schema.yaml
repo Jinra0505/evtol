@@ -8,6 +8,7 @@
     "config.use_generator",
     "config.K_paths",
     "sets.time",
+    "sets.groups",
     "sets.vot_groups",
     "sets.od_pairs",
     "sets.arcs",
@@ -26,6 +27,12 @@
     "parameters.avail",
     "parameters.electricity_price",
     "parameters.e_fly_or_drive",
+    "parameters.vertiport_storage",
+    "parameters.vertiport_cap_pax",
+    "parameters.vt_departure_capacity_total",
+    "parameters.vt_departure_capacity_fast",
+    "parameters.vt_pax_per_departure_fast",
+    "parameters.vt_pax_per_departure_slow",
     "itineraries"
   ]
 }
