@@ -1,0 +1,39 @@
+{
+  "representative_od": "B-C",
+  "stop_reason": "max_total_iter",
+  "converged_loose": true,
+  "converged_strictly": false,
+  "audit_ok": true,
+  "audit_has_warning": true,
+  "dx_end": 0.3438924571979738,
+  "dn_end": 0.03740723920792277,
+  "dprice_end": 3.21531100478469,
+  "dprice_raw_end": 0.0,
+  "C2_rel": 0.5202835219584534,
+  "C10": 24.112902222505475,
+  "max_surcharge": 4.822966507177034,
+  "iter_count_total": 240,
+  "peak_t": 3,
+  "peak_t_selection_rule": "max_total_demand",
+  "peak_t_total_demand": 184.0,
+  "unserved_demand_total": 0,
+  "aircraft_binding_count": 10.0,
+  "vertiport_cap_triggered_count": 8.0,
+  "power_binding_count": 2,
+  "access_energy_overlap_itineraries": 6,
+  "access_energy_inconsistent_itineraries": 6,
+  "SelfAudit": {
+    "ok": true,
+    "warnings": [
+      "C2 is smoothed mismatch; check C2_rel and dx_end for convergence",
+      "did not stop by patience",
+      "strict convergence thresholds not satisfied"
+    ],
+    "severe": []
+  },
+  "case_label": "stress_test_toy",
+  "bottleneck_summary": "mixed_or_power_constrained",
+  "ignored_config_fields": [
+    "K_paths (ignored when use_generator=false)"
+  ]
+}
