@@ -1,0 +1,37 @@
+{
+  "representative_od": "n1-n5",
+  "stop_reason": "patience",
+  "converged_loose": true,
+  "converged_strictly": true,
+  "audit_ok": true,
+  "audit_has_warning": true,
+  "dx_end": 0.12259391207897342,
+  "dn_end": 0.160755378180248,
+  "dprice_end": 1.3379627017937388,
+  "dprice_raw_end": 0.0,
+  "C2_rel": 0.11398604160846175,
+  "C10": 3.9262767401026792,
+  "max_surcharge": 24.099860665918964,
+  "iter_count_total": 13,
+  "peak_t": 3,
+  "peak_t_selection_rule": "max_total_demand",
+  "peak_t_total_demand": 120.0,
+  "unserved_demand_total": 0,
+  "aircraft_binding_count": 4.0,
+  "vertiport_cap_triggered_count": 0.0,
+  "power_binding_count": 5,
+  "access_energy_overlap_itineraries": 0,
+  "access_energy_inconsistent_itineraries": 0,
+  "SelfAudit": {
+    "ok": true,
+    "warnings": [
+      "C2 is smoothed mismatch; check C2_rel and dx_end for convergence"
+    ],
+    "severe": []
+  },
+  "case_label": "simple_ev_hybrid_only",
+  "bottleneck_summary": "mixed_or_power_constrained",
+  "ignored_config_fields": [
+    "K_paths (ignored when use_generator=false)"
+  ]
+}

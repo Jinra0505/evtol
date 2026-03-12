@@ -231,7 +231,7 @@ def _solve_shared_power_core_gurobi(
         for idx, t in enumerate(times):
             if idx < len(times) - 1:
                 lhs = B_out[dep][times[idx + 1]]
-                rhs = B_out[dep][t] + eta * P_out[dep][t] * delta_t - (e_dep[dep][t] - shed_vt_out[dep][t])
+                rhs = B_out[dep][t] + eta * P_out[dep][t] * delta_t - (float(e_dep.get(dep, {}).get(t, 0.0)) - shed_vt_out[dep][t])
                 residuals["INV1"] = max(residuals["INV1"], abs(lhs - rhs))
             residuals["INV2"] = max(
                 residuals["INV2"],
@@ -280,7 +280,7 @@ def solve_shared_power_inventory_highs(
     if storage_params is None and e_dep:
         raise ValueError("Missing required key path: parameters.vertiport_storage")
 
-    deps = list(e_dep.keys())
+    deps = [str(dep) for dep in storage_params.keys()]
     if not times:
         raise RuntimeError("Time set is empty")
     t_terminal = times[-1] + 1
@@ -310,7 +310,7 @@ def solve_shared_power_inventory_highs(
             add_var("B", dep, tau, storage_params[dep]["B_min"], storage_params[dep]["B_max"], 0.0)
         for t in times:
             add_var("P", dep, t, 0.0, station_params[dep]["P_site"][t], prices[dep][t] * delta_t)
-            add_var("SVT", dep, t, 0.0, e_dep[dep][t], voll_vt_per_kwh)
+            add_var("SVT", dep, t, 0.0, float(e_dep.get(dep, {}).get(t, 0.0)), voll_vt_per_kwh)
 
     for s in stations:
         for t in times:
@@ -335,7 +335,7 @@ def solve_shared_power_inventory_highs(
             row[var_idx[("P", dep, t)]] = -eta * delta_t
             row[var_idx[("SVT", dep, t)]] = -1.0
             A_eq.append(row)
-            b_eq.append(-float(e_dep[dep][t]))
+            b_eq.append(-float(e_dep.get(dep, {}).get(t, 0.0)))
 
     A_ub = []
     b_ub = []
@@ -462,7 +462,7 @@ def solve_shared_power_inventory_highs(
         for idx, t in enumerate(times):
             t_next = times_ext[idx + 1]
             lhs = B_out[dep][t_next]
-            rhs = B_out[dep][t] + eta * P_out[dep][t] * delta_t - (e_dep[dep][t] - shed_vt_out[dep][t])
+            rhs = B_out[dep][t] + eta * P_out[dep][t] * delta_t - (float(e_dep.get(dep, {}).get(t, 0.0)) - shed_vt_out[dep][t])
             residuals["INV1"] = max(residuals["INV1"], abs(lhs - rhs))
         for tau in times_ext:
             residuals["INV2"] = max(
@@ -650,9 +650,15 @@ def solve_shared_power_inventory_lp(
 ]:
     times = data["sets"]["time"]
     stations = set(_hybrid_station_list(data))
+    storage_params = data.get("parameters", {}).get("vertiport_storage", {})
+    if not set(str(k) for k in storage_params.keys()).issuperset(stations):
+        missing = sorted(stations - set(str(k) for k in storage_params.keys()))
+        raise ValueError(f"Missing required key path: parameters.vertiport_storage for hybrid stations {missing}")
+    e_dep_full = {s: {t: float(e_dep.get(s, {}).get(t, 0.0)) for t in times} for s in stations}
+    ev_energy_full = {s: {t: float(ev_energy.get(s, {}).get(t, 0.0)) for t in times} for s in stations}
     diagnostics_ref = data.setdefault("diagnostics_runtime", {})
     try:
-        B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals, lp_diag = _solve_shared_power_core(data, times, e_dep, ev_energy)
+        B_out, P_out, shed_ev_out, shed_vt_out, shadow_prices, residuals, lp_diag = _solve_shared_power_core(data, times, e_dep_full, ev_energy_full)
         diagnostics_ref["lp_ok"] = True
         diagnostics_ref["lp_failure"] = None
     except LPFailed as exc:
