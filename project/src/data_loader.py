@@ -62,6 +62,35 @@ def _normalize_od_structures(data: Dict[str, Any]) -> None:
             if "-" in key:
                 a, b = key.split("-", 1)
                 it["od"] = [a, b]
+
+
+def _harmonize_access_energy_fields(data: Dict[str, Any]) -> None:
+    """Canonicalize multimodal access energy with explicit access-station energy as source of truth."""
+    its = data.get("itineraries", [])
+    for it in its if isinstance(its, list) else []:
+        mode = str(it.get("mode", "")).lower()
+        if not mode.startswith("ev_to_evtol"):
+            continue
+
+        explicit_by_t: Dict[int, float] = {}
+        for stop in it.get("access_stations", []) or []:
+            try:
+                t = int(stop.get("t"))
+            except (TypeError, ValueError):
+                continue
+            explicit_by_t[t] = explicit_by_t.get(t, 0.0) + float(stop.get("energy", 0.0) or 0.0)
+
+        if "access_energy_kwh" not in it:
+            continue
+        scalar = it.get("access_energy_kwh")
+        if isinstance(scalar, dict):
+            aligned = {int(k): float(v) for k, v in scalar.items()}
+            for t, e in explicit_by_t.items():
+                aligned[t] = e
+            it["access_energy_kwh"] = aligned
+        elif explicit_by_t:
+            it["access_energy_kwh"] = sum(explicit_by_t.values()) / max(1, len(explicit_by_t))
+
 def _validate_basic_shapes(data: Dict[str, Any]) -> None:
     sets = data.get("sets", {})
     params = data.get("parameters", {})
@@ -112,6 +141,7 @@ def load_data(data_path: str, schema_path: str) -> Dict[str, Any]:
     data = _coerce_numeric_keys(data)
     data = _coerce_numeric_values(data)
     _normalize_od_structures(data)
+    _harmonize_access_energy_fields(data)
 
     required_paths = schema.get("required_paths", [])
     try:

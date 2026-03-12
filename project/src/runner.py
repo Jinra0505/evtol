@@ -98,13 +98,14 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     cfg.setdefault("surcharge_method", "shadow_lp")
     cfg.setdefault("surcharge_decay_raw_threshold", 1.0e-3)
     cfg.setdefault("surcharge_decay_factor", 0.6)
+    cfg.setdefault("flow_msa_alpha", None)
     cfg.setdefault("reroute_logit_temperature", 1.25)
-    cfg.setdefault("min_multimodal_reroute_share", 0.05)
+    cfg.setdefault("min_multimodal_reroute_share", 0.0)
     cfg.setdefault("shadow_price_scale", 1.0)
     cfg.setdefault("shadow_price_cap_mult", 10.0)
     cfg.setdefault("shadow_price_cap_abs", None)
     cfg.setdefault("vt_reliability_floor", 0.05)
-    cfg.setdefault("min_vt_reroute_share", 0.1)
+    cfg.setdefault("min_vt_reroute_share", 0.0)
     cfg.setdefault("vt_reliability_alpha", None)
     cfg.setdefault("vt_reliability_skip_below", 0.0)
     cfg.setdefault("vt_reliability_gamma", 0.0)
@@ -881,6 +882,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     times = data["sets"]["time"]
     arcs = data["sets"]["arcs"]
     stations = data["sets"]["stations"]
+    groups = list(data.get("sets", {}).get("groups", []))
     delta_t = data["meta"]["delta_t"]
     config = _normalize_config(data["config"])
     itineraries = list(data["itineraries"])
@@ -999,6 +1001,8 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "aircraft_feasible_vt_but_all_ev_count": 0.0,
         "aircraft_lag_oob_count": 0.0,
         "power_binding_count": 0,
+        "terminal_soc_by_station": {},
+        "storage_energy_totals_by_station": {},
         "access_energy_overlap_itineraries": access_overlap_itins,
         "access_energy_inconsistent_itineraries": access_inconsistent_itins,
     }
@@ -1010,9 +1014,11 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     d_vt_route: Dict[str, Dict[int, float]] = {}
     d_vt_dep: Dict[str, Dict[int, float]] = {}
     e_dep: Dict[str, Dict[int, float]] = {}
+    flows_prev: Dict[str, Dict[str, Dict[int, float]]] | None = None
     shadow_prices: Dict[str, Dict[int, float]] | None = None
     raw_surcharge: Dict[str, Dict[int, float]] = {s: {t: 0.0 for t in times} for s in stations}
     raw_surcharge_uncapped: Dict[str, Dict[int, float | None]] = {s: {t: 0.0 for t in times} for s in stations}
+    raw_zero_streak: Dict[str, Dict[int, int]] = {s: {t: 0 for t in times} for s in stations}
     shed_ev: Dict[str, Dict[int, float]] | None = None
     shed_vt: Dict[str, Dict[int, float]] | None = None
     P_vt_lp: Dict[str, Dict[int, float]] | None = None
@@ -1147,6 +1153,24 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             for _t in grp.keys()
         )
 
+        alpha_flow_cfg = config.get("flow_msa_alpha")
+        phi_flow = float(alpha_flow_cfg) if alpha_flow_cfg is not None else (2.0 / (iteration + 2.0))
+        phi_flow = min(1.0, max(1.0e-3, phi_flow))
+        if flows_prev is not None:
+            for it in itineraries:
+                it_id = it["id"]
+                for g in groups:
+                    prev_map = flows_prev.get(it_id, {}).get(g, {})
+                    cur_map = flows.get(it_id, {}).get(g, {})
+                    for t in times:
+                        prev_v = float(prev_map.get(t, 0.0))
+                        cur_v = float(cur_map.get(t, 0.0))
+                        flows[it_id].setdefault(g, {})[t] = (1.0 - phi_flow) * prev_v + phi_flow * cur_v
+        flows_prev = {
+            it["id"]: {g: {t: float(flows.get(it["id"], {}).get(g, {}).get(t, 0.0)) for t in times} for g in groups}
+            for it in itineraries
+        }
+
         d_vt_route = aggregate_evtol_demand(flows, itineraries, times)
         d_vt_dep = aggregate_evtol_dep_demand(itineraries, flows, times)
         e_dep = compute_evtol_energy_demand(d_vt_route, itineraries, times)
@@ -1268,8 +1292,15 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                 raw_thr = float(config.get("surcharge_decay_raw_threshold", 1.0e-3))
                 decay = float(config.get("surcharge_decay_factor", 0.6))
                 if abs(float(raw_surcharge[s][t])) <= raw_thr:
-                    candidate = min(candidate, decay * energy_surcharge[s][t])
-                energy_surcharge[s][t] = max(0.0, candidate)
+                    raw_zero_streak[s][t] += 1
+                    if raw_zero_streak[s][t] >= 3:
+                        energy_surcharge[s][t] = 0.0
+                    else:
+                        candidate = min(candidate, decay * energy_surcharge[s][t])
+                        energy_surcharge[s][t] = max(0.0, candidate)
+                else:
+                    raw_zero_streak[s][t] = 0
+                    energy_surcharge[s][t] = max(0.0, candidate)
                 vt_next = (1.0 - alpha_vt) * vt_service_prob[s][t] + alpha_vt * vt_service_prob_target[s][t]
                 vt_floor = float(config.get("vt_reliability_floor", 0.05))
                 vt_service_prob[s][t] = min(1.0, max(vt_floor, vt_next))
@@ -1559,8 +1590,9 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         if iteration + 1 >= min_iters:
             metric = max(dx, dn, dprice_raw)
             improved = (prev_metric - metric) > eps_improve
+            strict_gate_required = bool(config.get("patience_require_strict_gate", True)) and bool(config.get("strict_convergence", False))
             strict_gate_ok = False
-            if bool(config.get("patience_require_strict_gate", True)):
+            if strict_gate_required:
                 residuals_iter = compute_residuals(
                     data,
                     itineraries,
@@ -1583,7 +1615,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
                     float(config.get("tol", 0.0)),
                     True,
                 )["converged_strictly"]
-            if bool(config.get("patience_require_strict_gate", True)):
+            if strict_gate_required:
                 qualifies = strict_gate_ok
             else:
                 qualifies = (metric < config["tol"]) or improved
@@ -1709,6 +1741,42 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             if float(((shadow_prices or {}).get(s, {}).get(t, 0.0) or 0.0)) > 1.0e-9:
                 positive_mu_points += 1
     diagnostics["power_binding_count"] = int(positive_mu_points)
+    terminal_soc_by_station: Dict[str, Dict[str, float | bool]] = {}
+    storage_energy_totals_by_station: Dict[str, Dict[str, float]] = {}
+    storage_params = data.get("parameters", {}).get("vertiport_storage", {})
+    for s in stations:
+        b_cfg = storage_params.get(s, {})
+        b_init = float(b_cfg.get("B_init", b_cfg.get("B_min", 0.0)))
+        b_target = float(charging._terminal_soc_target(b_cfg, data.get("config", {}), s))
+        b_end = float((B_vt_lp or {}).get(s, {}).get(times[-1] + 1, (B_vt_lp or {}).get(s, {}).get(times[-1], 0.0)) if times else 0.0)
+        gap = b_end - b_target
+        terminal_soc_by_station[s] = {
+            "terminal_soc_policy": str(config.get("terminal_soc_policy", "at_least_init")),
+            "terminal_soc_target_kwh": b_target,
+            "terminal_soc_actual_end_kwh": b_end,
+            "terminal_soc_gap_kwh": gap,
+            "terminal_soc_binding": abs(gap) <= 1.0e-6,
+            "terminal_soc_above_target": b_end >= b_target - 1.0e-6,
+            "initial_soc_kwh": b_init,
+            "terminal_vs_init_gap_kwh": b_end - b_init,
+        }
+        charge_kwh = 0.0
+        discharge_kwh = 0.0
+        for t in times:
+            p_ch = float((P_vt_lp or {}).get(s, {}).get(t, 0.0))
+            e_served = float((e_dep or {}).get(s, {}).get(t, 0.0)) - float((shed_vt or {}).get(s, {}).get(t, 0.0))
+            charge_kwh += max(0.0, p_ch * float(delta_t))
+            discharge_kwh += max(0.0, e_served)
+        storage_energy_totals_by_station[s] = {
+            "storage_total_charge_kwh": charge_kwh,
+            "storage_total_discharge_kwh": discharge_kwh,
+            "storage_net_discharge_kwh": max(0.0, discharge_kwh - charge_kwh),
+        }
+    diagnostics["terminal_soc_by_station"] = terminal_soc_by_station
+    diagnostics["storage_energy_totals_by_station"] = storage_energy_totals_by_station
+    diagnostics["storage_soc_trajectory_kwh"] = B_vt_report
+    diagnostics["storage_charge_power_kw"] = {s: {t: float((P_vt_lp or {}).get(s, {}).get(t, 0.0)) for t in times} for s in stations}
+
     if positive_mu_points == 0 and float(diagnostics.get("aircraft_binding_count", 0.0)) > 0:
         diagnostics["bottleneck_summary"] = "aircraft_inventory_or_turnaround_dominant_not_shared_power"
     else:

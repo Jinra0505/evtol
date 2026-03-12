@@ -1,0 +1,1115 @@
+meta:
+  T: 5
+  delta_t: 1.0
+config:
+  max_iter: 240
+  max_total_iter: 240
+  min_iters: 12
+  patience: 8
+  tol: 1.2
+  eps_improve: 1e-06
+  surcharge_msa_alpha: 0.03
+  surcharge_kappa: 0.12
+  surcharge_beta: 2.0
+  representative_od: B-C
+  use_generator: false
+  K_paths: 2
+  vt_reliability_gamma: 0.2
+  ev_reliability_gamma: 0.05
+  shadow_price_cap_mult: 400.0
+  shadow_price_cap_abs: 1200.0
+  strict_audit: true
+  audit_raise: true
+  strict_convergence: false
+  min_vt_reroute_share: 0.2
+  case_label: stress_test_toy
+  peak_t_selection_rule: max_total_demand
+sets:
+  time:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  groups:
+  - low
+  - mid
+  - high
+  vot_groups:
+  - low
+  - mid
+  - high
+  od_pairs:
+  - - A
+    - B
+  - - A
+    - C
+  - - B
+    - C
+  ods:
+  - A-B
+  - A-C
+  - B-C
+  arcs:
+  - a12
+  - a13
+  - a21
+  - a31
+  - cbd
+  stations:
+  - s1
+  - s2
+  - s3
+  vehicles:
+  - m1
+parameters:
+  q:
+    A-B:
+      low:
+        '1': 10.0
+        '2': 14.0
+        '3': 24.0
+        '4': 18.0
+        '5': 12.0
+      mid:
+        '1': 7.0
+        '2': 10.0
+        '3': 18.0
+        '4': 13.0
+        '5': 8.0
+      high:
+        '1': 5.0
+        '2': 8.0
+        '3': 14.0
+        '4': 10.0
+        '5': 6.0
+    A-C:
+      low:
+        '1': 12.0
+        '2': 18.0
+        '3': 30.0
+        '4': 24.0
+        '5': 14.0
+      mid:
+        '1': 8.0
+        '2': 12.0
+        '3': 21.0
+        '4': 16.0
+        '5': 10.0
+      high:
+        '1': 5.0
+        '2': 8.0
+        '3': 15.0
+        '4': 12.0
+        '5': 7.0
+    B-C:
+      low:
+        '1': 11.0
+        '2': 16.0
+        '3': 28.0
+        '4': 22.0
+        '5': 13.0
+      mid:
+        '1': 8.0
+        '2': 12.0
+        '3': 20.0
+        '4': 16.0
+        '5': 9.0
+      high:
+        '1': 5.0
+        '2': 8.0
+        '3': 14.0
+        '4': 11.0
+        '5': 6.0
+  VOT:
+    low:
+      '1': 2.3
+      '2': 2.3
+      '3': 2.3
+      '4': 2.3
+      '5': 2.3
+    mid:
+      '1': 8.5
+      '2': 8.5
+      '3': 8.5
+      '4': 8.5
+      '5': 8.5
+    high:
+      '1': 19.0
+      '2': 19.0
+      '3': 19.0
+      '4': 19.0
+      '5': 19.0
+  lambda:
+    low: 0.1
+    mid: 0.2
+    high: 0.75
+  arcs:
+    a12:
+      tau0: 2.0
+      cap: 120
+      alpha: 0.15
+      beta: 4.0
+      type: G
+    a13:
+      tau0: 2.2
+      cap: 124
+      alpha: 0.15
+      beta: 4.0
+      type: G
+    a21:
+      tau0: 2.1
+      cap: 112
+      alpha: 0.15
+      beta: 4.0
+      type: G
+    a31:
+      tau0: 2.3
+      cap: 114
+      alpha: 0.15
+      beta: 4.0
+      type: G
+    cbd:
+      tau0: 3.1
+      cap: 95
+      alpha: 0.15
+      beta: 4.0
+      type: CBD
+      theta: 1.4
+  boundary_in:
+  - a12
+  - a13
+  boundary_out:
+  - a21
+  - a31
+  n0: 36
+  mfd:
+    gamma: 0.5
+    n_crit: 125
+    g_max: 1.7
+  stations:
+    s1:
+      cap_stall: 6
+      w0: 0.18
+      P_site:
+        '1': 42.0
+        '2': 42.0
+        '3': 42.0
+        '4': 42.0
+        '5': 42.0
+    s2:
+      cap_stall: 6
+      w0: 0.2
+      P_site:
+        '1': 40.0
+        '2': 40.0
+        '3': 40.0
+        '4': 40.0
+        '5': 40.0
+    s3:
+      cap_stall: 6
+      w0: 0.2
+      P_site:
+        '1': 38.0
+        '2': 38.0
+        '3': 38.0
+        '4': 38.0
+        '5': 38.0
+  charging:
+    m1:
+      E_min: 1
+      E_max: 45
+      E_init: 16
+      E_res: 2
+      eta_ch: 0.92
+      P_max: 18
+  avail:
+    m1:
+      s1:
+        '1': 1.0
+        '2': 1.0
+        '3': 1.0
+        '4': 1.0
+        '5': 1.0
+      s2:
+        '1': 1.0
+        '2': 1.0
+        '3': 1.0
+        '4': 1.0
+        '5': 1.0
+      s3:
+        '1': 1.0
+        '2': 1.0
+        '3': 1.0
+        '4': 1.0
+        '5': 1.0
+  electricity_price:
+    s1:
+      '1': 0.24
+      '2': 0.25
+      '3': 0.29
+      '4': 0.28
+      '5': 0.24
+    s2:
+      '1': 0.22
+      '2': 0.23
+      '3': 0.28
+      '4': 0.27
+      '5': 0.22
+    s3:
+      '1': 0.2
+      '2': 0.21
+      '3': 0.26
+      '4': 0.25
+      '5': 0.2
+  e_fly_or_drive:
+    m1:
+      '1': 2.0
+      '2': 2.0
+      '3': 2.0
+      '4': 2.0
+      '5': 2.0
+  vertiport_storage:
+    s1:
+      B_init: 20
+      B_min: 2
+      B_max: 60
+      eta_ch: 0.92
+    s2:
+      B_init: 20
+      B_min: 2
+      B_max: 60
+      eta_ch: 0.92
+    s3:
+      B_init: 20
+      B_min: 2
+      B_max: 60
+      eta_ch: 0.92
+  vertiport_cap_pax:
+    s1:
+      '1': 42
+      '2': 34
+      '3': 20
+      '4': 22
+      '5': 40
+    s2:
+      '1': 32
+      '2': 26
+      '3': 12
+      '4': 14
+      '5': 30
+    s3:
+      '1': 40
+      '2': 34
+      '3': 20
+      '4': 22
+      '5': 38
+  vt_departure_capacity_total:
+    s1:
+      '1': 13
+      '2': 13
+      '3': 10
+      '4': 10
+      '5': 13
+    s2:
+      '1': 13
+      '2': 13
+      '3': 10
+      '4': 10
+      '5': 13
+    s3:
+      '1': 13
+      '2': 13
+      '3': 10
+      '4': 10
+      '5': 13
+  vt_departure_capacity_fast:
+    s1:
+      '1': 4
+      '2': 4
+      '3': 3
+      '4': 3
+      '5': 4
+    s2:
+      '1': 4
+      '2': 4
+      '3': 3
+      '4': 3
+      '5': 4
+    s3:
+      '1': 4
+      '2': 4
+      '3': 3
+      '4': 3
+      '5': 4
+  transfer_time_default: 0.46
+  transfer_time_by_station:
+    s1: 0.56
+    s2: 0.42
+  vt_pax_per_departure_fast: 2.0
+  vt_pax_per_departure_slow: 4.0
+  vt_turnaround_lag: 1
+  vt_aircraft_init_by_station:
+    s1: 6
+    s2: 4
+    s3: 5
+itineraries:
+- id: ab_ev1
+  od:
+  - A
+  - B
+  mode: EV
+  road_arcs:
+  - arc: a12
+    t: 1
+    frac: 1.0
+  - arc: a12
+    t: 2
+    frac: 1.0
+  - arc: a12
+    t: 3
+    frac: 1.0
+  - arc: a12
+    t: 4
+    frac: 1.0
+  - arc: a12
+    t: 5
+    frac: 1.0
+  - arc: cbd
+    t: 1
+    frac: 0.7
+  - arc: cbd
+    t: 2
+    frac: 0.7
+  - arc: cbd
+    t: 3
+    frac: 0.7
+  - arc: cbd
+    t: 4
+    frac: 0.7
+  - arc: cbd
+    t: 5
+    frac: 0.7
+  stations:
+  - station: s1
+    t: 1
+    energy: 0.55
+  - station: s1
+    t: 2
+    energy: 0.55
+  - station: s1
+    t: 3
+    energy: 0.55
+  - station: s1
+    t: 4
+    energy: 0.55
+  - station: s1
+    t: 5
+    energy: 0.55
+  money: 1.1
+- id: ab_ev2
+  od:
+  - A
+  - B
+  mode: EV
+  road_arcs:
+  - arc: a13
+    t: 1
+    frac: 0.95
+  - arc: a13
+    t: 2
+    frac: 0.95
+  - arc: a13
+    t: 3
+    frac: 0.95
+  - arc: a13
+    t: 4
+    frac: 0.95
+  - arc: a13
+    t: 5
+    frac: 0.95
+  stations:
+  - station: s2
+    t: 1
+    energy: 0.5
+  - station: s2
+    t: 2
+    energy: 0.5
+  - station: s2
+    t: 3
+    energy: 0.5
+  - station: s2
+    t: 4
+    energy: 0.5
+  - station: s2
+    t: 5
+    energy: 0.5
+  money: 1.0
+- id: ab_vt_fast
+  od:
+  - A
+  - B
+  mode: eVTOL_fast
+  dep_station: s1
+  arr_station: s2
+  service_class: fast
+  flight_time:
+    '1': 0.85
+    '2': 0.9
+    '3': 0.95
+    '4': 0.95
+    '5': 0.85
+  money: 4.2
+  e_per_pax: 1.3
+- id: ab_vt_slow
+  od:
+  - A
+  - B
+  mode: eVTOL_slow
+  dep_station: s1
+  arr_station: s3
+  service_class: slow
+  flight_time:
+    '1': 1.2
+    '2': 1.25
+    '3': 1.3
+    '4': 1.3
+    '5': 1.2
+  money: 3.0
+  e_per_pax: 1.0
+- id: ab_mm_fast
+  od:
+  - A
+  - B
+  mode: EV_to_eVTOL_fast
+  dep_station: s2
+  arr_station: s3
+  service_class: fast
+  access_arcs:
+  - arc: a21
+    t: 1
+    frac: 0.35
+  - arc: a21
+    t: 2
+    frac: 0.35
+  - arc: a21
+    t: 3
+    frac: 0.35
+  - arc: a21
+    t: 4
+    frac: 0.35
+  - arc: a21
+    t: 5
+    frac: 0.35
+  egress_arcs:
+  - arc: a12
+    t: 1
+    frac: 0.3
+  - arc: a12
+    t: 2
+    frac: 0.3
+  - arc: a12
+    t: 3
+    frac: 0.3
+  - arc: a12
+    t: 4
+    frac: 0.3
+  - arc: a12
+    t: 5
+    frac: 0.3
+  access_stations:
+  - station: s2
+    t: 1
+    energy: 0.32
+  - station: s2
+    t: 2
+    energy: 0.32
+  - station: s2
+    t: 3
+    energy: 0.32
+  - station: s2
+    t: 4
+    energy: 0.32
+  - station: s2
+    t: 5
+    energy: 0.32
+  flight_time:
+    '1': 0.95
+    '2': 1.0
+    '3': 1.05
+    '4': 1.05
+    '5': 0.95
+  money: 2.5
+  e_per_pax: 0.95
+  transfer_time: 0.34
+- id: ab_mm_slow
+  od:
+  - A
+  - B
+  mode: EV_to_eVTOL_slow
+  dep_station: s3
+  arr_station: s2
+  service_class: slow
+  access_arcs:
+  - arc: a31
+    t: 1
+    frac: 0.34
+  - arc: a31
+    t: 2
+    frac: 0.34
+  - arc: a31
+    t: 3
+    frac: 0.34
+  - arc: a31
+    t: 4
+    frac: 0.34
+  - arc: a31
+    t: 5
+    frac: 0.34
+  egress_arcs:
+  - arc: a13
+    t: 1
+    frac: 0.28
+  - arc: a13
+    t: 2
+    frac: 0.28
+  - arc: a13
+    t: 3
+    frac: 0.28
+  - arc: a13
+    t: 4
+    frac: 0.28
+  - arc: a13
+    t: 5
+    frac: 0.28
+  access_stations:
+  - station: s3
+    t: 1
+    energy: 0.28
+  - station: s3
+    t: 2
+    energy: 0.28
+  - station: s3
+    t: 3
+    energy: 0.28
+  - station: s3
+    t: 4
+    energy: 0.28
+  - station: s3
+    t: 5
+    energy: 0.28
+  flight_time:
+    '1': 1.15
+    '2': 1.2
+    '3': 1.25
+    '4': 1.25
+    '5': 1.15
+  money: 1.9
+  e_per_pax: 0.8
+  transfer_time: 0.48
+- id: ac_ev1
+  od:
+  - A
+  - C
+  mode: EV
+  road_arcs:
+  - arc: a12
+    t: 1
+    frac: 0.95
+  - arc: a12
+    t: 2
+    frac: 0.95
+  - arc: a12
+    t: 3
+    frac: 0.95
+  - arc: a12
+    t: 4
+    frac: 0.95
+  - arc: a12
+    t: 5
+    frac: 0.95
+  - arc: cbd
+    t: 1
+    frac: 1.0
+  - arc: cbd
+    t: 2
+    frac: 1.0
+  - arc: cbd
+    t: 3
+    frac: 1.0
+  - arc: cbd
+    t: 4
+    frac: 1.0
+  - arc: cbd
+    t: 5
+    frac: 1.0
+  stations:
+  - station: s1
+    t: 1
+    energy: 0.62
+  - station: s1
+    t: 2
+    energy: 0.62
+  - station: s1
+    t: 3
+    energy: 0.62
+  - station: s1
+    t: 4
+    energy: 0.62
+  - station: s1
+    t: 5
+    energy: 0.62
+  money: 1.25
+- id: ac_ev2
+  od:
+  - A
+  - C
+  mode: EV
+  road_arcs:
+  - arc: a13
+    t: 1
+    frac: 1.05
+  - arc: a13
+    t: 2
+    frac: 1.05
+  - arc: a13
+    t: 3
+    frac: 1.05
+  - arc: a13
+    t: 4
+    frac: 1.05
+  - arc: a13
+    t: 5
+    frac: 1.05
+  stations:
+  - station: s3
+    t: 1
+    energy: 0.5
+  - station: s3
+    t: 2
+    energy: 0.5
+  - station: s3
+    t: 3
+    energy: 0.5
+  - station: s3
+    t: 4
+    energy: 0.5
+  - station: s3
+    t: 5
+    energy: 0.5
+  money: 1.0
+- id: ac_vt_fast
+  od:
+  - A
+  - C
+  mode: eVTOL_fast
+  dep_station: s1
+  arr_station: s3
+  service_class: fast
+  flight_time:
+    '1': 1.05
+    '2': 1.1
+    '3': 1.15
+    '4': 1.15
+    '5': 1.05
+  money: 4.8
+  e_per_pax: 1.35
+- id: ac_vt_slow
+  od:
+  - A
+  - C
+  mode: eVTOL_slow
+  dep_station: s2
+  arr_station: s3
+  service_class: slow
+  flight_time:
+    '1': 1.35
+    '2': 1.4
+    '3': 1.45
+    '4': 1.45
+    '5': 1.35
+  money: 3.4
+  e_per_pax: 1.1
+- id: ac_mm_fast
+  od:
+  - A
+  - C
+  mode: EV_to_eVTOL_fast
+  dep_station: s2
+  arr_station: s3
+  service_class: fast
+  access_arcs:
+  - arc: a21
+    t: 1
+    frac: 0.45
+  - arc: a21
+    t: 2
+    frac: 0.45
+  - arc: a21
+    t: 3
+    frac: 0.45
+  - arc: a21
+    t: 4
+    frac: 0.45
+  - arc: a21
+    t: 5
+    frac: 0.45
+  egress_arcs:
+  - arc: a31
+    t: 1
+    frac: 0.3
+  - arc: a31
+    t: 2
+    frac: 0.3
+  - arc: a31
+    t: 3
+    frac: 0.3
+  - arc: a31
+    t: 4
+    frac: 0.3
+  - arc: a31
+    t: 5
+    frac: 0.3
+  access_stations:
+  - station: s2
+    t: 1
+    energy: 0.35
+  - station: s2
+    t: 2
+    energy: 0.35
+  - station: s2
+    t: 3
+    energy: 0.35
+  - station: s2
+    t: 4
+    energy: 0.35
+  - station: s2
+    t: 5
+    energy: 0.35
+  flight_time:
+    '1': 0.8
+    '2': 0.85
+    '3': 0.9
+    '4': 0.9
+    '5': 0.8
+  money: 2.0
+  e_per_pax: 0.9
+  transfer_time: 0.28
+- id: ac_mm_slow
+  od:
+  - A
+  - C
+  mode: EV_to_eVTOL_slow
+  dep_station: s1
+  arr_station: s2
+  service_class: slow
+  access_arcs:
+  - arc: a12
+    t: 1
+    frac: 0.37
+  - arc: a12
+    t: 2
+    frac: 0.37
+  - arc: a12
+    t: 3
+    frac: 0.37
+  - arc: a12
+    t: 4
+    frac: 0.37
+  - arc: a12
+    t: 5
+    frac: 0.37
+  egress_arcs:
+  - arc: a21
+    t: 1
+    frac: 0.25
+  - arc: a21
+    t: 2
+    frac: 0.25
+  - arc: a21
+    t: 3
+    frac: 0.25
+  - arc: a21
+    t: 4
+    frac: 0.25
+  - arc: a21
+    t: 5
+    frac: 0.25
+  access_stations:
+  - station: s1
+    t: 1
+    energy: 0.28
+  - station: s1
+    t: 2
+    energy: 0.28
+  - station: s1
+    t: 3
+    energy: 0.28
+  - station: s1
+    t: 4
+    energy: 0.28
+  - station: s1
+    t: 5
+    energy: 0.28
+  flight_time:
+    '1': 1.0
+    '2': 1.05
+    '3': 1.1
+    '4': 1.1
+    '5': 1.0
+  money: 1.7
+  e_per_pax: 0.75
+  transfer_time: 0.44
+- id: bc_ev1
+  od:
+  - B
+  - C
+  mode: EV
+  road_arcs:
+  - arc: a21
+    t: 1
+    frac: 1.0
+  - arc: a21
+    t: 2
+    frac: 1.0
+  - arc: a21
+    t: 3
+    frac: 1.0
+  - arc: a21
+    t: 4
+    frac: 1.0
+  - arc: a21
+    t: 5
+    frac: 1.0
+  - arc: cbd
+    t: 1
+    frac: 0.8
+  - arc: cbd
+    t: 2
+    frac: 0.8
+  - arc: cbd
+    t: 3
+    frac: 0.8
+  - arc: cbd
+    t: 4
+    frac: 0.8
+  - arc: cbd
+    t: 5
+    frac: 0.8
+  stations:
+  - station: s2
+    t: 1
+    energy: 0.6
+  - station: s2
+    t: 2
+    energy: 0.6
+  - station: s2
+    t: 3
+    energy: 0.6
+  - station: s2
+    t: 4
+    energy: 0.6
+  - station: s2
+    t: 5
+    energy: 0.6
+  money: 1.05
+- id: bc_ev2
+  od:
+  - B
+  - C
+  mode: EV
+  road_arcs:
+  - arc: a31
+    t: 1
+    frac: 0.95
+  - arc: a31
+    t: 2
+    frac: 0.95
+  - arc: a31
+    t: 3
+    frac: 0.95
+  - arc: a31
+    t: 4
+    frac: 0.95
+  - arc: a31
+    t: 5
+    frac: 0.95
+  stations:
+  - station: s3
+    t: 1
+    energy: 0.48
+  - station: s3
+    t: 2
+    energy: 0.48
+  - station: s3
+    t: 3
+    energy: 0.48
+  - station: s3
+    t: 4
+    energy: 0.48
+  - station: s3
+    t: 5
+    energy: 0.48
+  money: 0.9
+- id: bc_vt_fast
+  od:
+  - B
+  - C
+  mode: eVTOL_fast
+  dep_station: s2
+  arr_station: s1
+  service_class: fast
+  flight_time:
+    '1': 0.9
+    '2': 0.95
+    '3': 1.0
+    '4': 1.0
+    '5': 0.9
+  money: 4.4
+  e_per_pax: 1.25
+- id: bc_vt_slow
+  od:
+  - B
+  - C
+  mode: eVTOL_slow
+  dep_station: s2
+  arr_station: s3
+  service_class: slow
+  flight_time:
+    '1': 1.2
+    '2': 1.25
+    '3': 1.3
+    '4': 1.3
+    '5': 1.2
+  money: 2.8
+  e_per_pax: 0.95
+- id: bc_mm_fast
+  od:
+  - B
+  - C
+  mode: EV_to_eVTOL_fast
+  dep_station: s1
+  arr_station: s3
+  service_class: fast
+  access_arcs:
+  - arc: a12
+    t: 1
+    frac: 0.4
+  - arc: a12
+    t: 2
+    frac: 0.4
+  - arc: a12
+    t: 3
+    frac: 0.4
+  - arc: a12
+    t: 4
+    frac: 0.4
+  - arc: a12
+    t: 5
+    frac: 0.4
+  egress_arcs:
+  - arc: a13
+    t: 1
+    frac: 0.34
+  - arc: a13
+    t: 2
+    frac: 0.34
+  - arc: a13
+    t: 3
+    frac: 0.34
+  - arc: a13
+    t: 4
+    frac: 0.34
+  - arc: a13
+    t: 5
+    frac: 0.34
+  access_stations:
+  - station: s1
+    t: 1
+    energy: 0.3
+  - station: s1
+    t: 2
+    energy: 0.3
+  - station: s1
+    t: 3
+    energy: 0.3
+  - station: s1
+    t: 4
+    energy: 0.3
+  - station: s1
+    t: 5
+    energy: 0.3
+  flight_time:
+    '1': 0.9
+    '2': 0.95
+    '3': 1.0
+    '4': 1.0
+    '5': 0.9
+  money: 2.2
+  e_per_pax: 0.9
+  transfer_time: 0.33
+- id: bc_mm_slow
+  od:
+  - B
+  - C
+  mode: EV_to_eVTOL_slow
+  dep_station: s3
+  arr_station: s1
+  service_class: slow
+  access_arcs:
+  - arc: a31
+    t: 1
+    frac: 0.34
+  - arc: a31
+    t: 2
+    frac: 0.34
+  - arc: a31
+    t: 3
+    frac: 0.34
+  - arc: a31
+    t: 4
+    frac: 0.34
+  - arc: a31
+    t: 5
+    frac: 0.34
+  egress_arcs:
+  - arc: a12
+    t: 1
+    frac: 0.28
+  - arc: a12
+    t: 2
+    frac: 0.28
+  - arc: a12
+    t: 3
+    frac: 0.28
+  - arc: a12
+    t: 4
+    frac: 0.28
+  - arc: a12
+    t: 5
+    frac: 0.28
+  access_stations:
+  - station: s3
+    t: 1
+    energy: 0.26
+  - station: s3
+    t: 2
+    energy: 0.26
+  - station: s3
+    t: 3
+    energy: 0.26
+  - station: s3
+    t: 4
+    energy: 0.26
+  - station: s3
+    t: 5
+    energy: 0.26
+  flight_time:
+    '1': 1.1
+    '2': 1.15
+    '3': 1.2
+    '4': 1.2
+    '5': 1.1
+  money: 1.6
+  e_per_pax: 0.72
+  transfer_time: 0.43
