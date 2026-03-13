@@ -506,30 +506,35 @@ def _reroute_excess_with_conditional_logit(
     vt_idx = [i for i, (it, _) in enumerate(feasible) if is_evtol_itinerary(it)]
     mm_idx = [i for i, (it, _) in enumerate(feasible) if is_multimodal_evtol(it)]
     ev_idx = [i for i, (it, _) in enumerate(feasible) if not is_evtol_itinerary(it)]
-    vt_prob = sum(probs[i] for i in vt_idx)
-    if vt_idx and min_vt_reroute_share > 0.0 and vt_prob < min_vt_reroute_share and ev_idx:
-        target = min(float(min_vt_reroute_share), 1.0)
-        if vt_prob < target:
-            delta = target - vt_prob
-            ev_mass = sum(probs[i] for i in ev_idx)
-            if ev_mass > 1.0e-12:
-                for i in vt_idx:
-                    probs[i] += delta * (probs[i] / max(vt_prob, 1.0e-12))
-                for i in ev_idx:
-                    probs[i] -= delta * (probs[i] / ev_mass)
 
-    mm_prob = sum(probs[i] for i in mm_idx)
-    if mm_idx and min_multimodal_reroute_share > 0.0 and mm_prob < min_multimodal_reroute_share:
-        target_mm = min(float(min_multimodal_reroute_share), 1.0)
-        if mm_prob < target_mm:
-            delta_mm = target_mm - mm_prob
-            donor_idx = [i for i in range(len(probs)) if i not in mm_idx]
-            donor_mass = sum(probs[i] for i in donor_idx)
-            if donor_mass > 1.0e-12:
-                for i in mm_idx:
-                    probs[i] += delta_mm * (probs[i] / max(mm_prob, 1.0e-12))
-                for i in donor_idx:
-                    probs[i] -= delta_mm * (probs[i] / donor_mass)
+    def _enforce_min_share(recipient_idx: List[int], target: float, donor_idx: List[int]) -> None:
+        if not recipient_idx or target <= 0.0:
+            return
+        target = min(max(float(target), 0.0), 1.0)
+        current = sum(probs[i] for i in recipient_idx)
+        if current >= target - 1.0e-12:
+            return
+        donor_mass = sum(probs[i] for i in donor_idx)
+        if donor_mass <= 1.0e-12:
+            return
+        transfer = min(target - current, donor_mass)
+        recip_mass = sum(probs[i] for i in recipient_idx)
+        if recip_mass > 1.0e-12:
+            for i in recipient_idx:
+                probs[i] += transfer * (probs[i] / recip_mass)
+        else:
+            add = transfer / max(1, len(recipient_idx))
+            for i in recipient_idx:
+                probs[i] += add
+        for i in donor_idx:
+            probs[i] -= transfer * (probs[i] / donor_mass)
+
+    if vt_idx and min_vt_reroute_share > 0.0 and ev_idx:
+        _enforce_min_share(vt_idx, float(min_vt_reroute_share), ev_idx)
+
+    if mm_idx and min_multimodal_reroute_share > 0.0:
+        donor_idx = [i for i in range(len(probs)) if i not in mm_idx]
+        _enforce_min_share(mm_idx, float(min_multimodal_reroute_share), donor_idx)
 
     probs = [max(0.0, p) for p in probs]
     norm = sum(probs)
