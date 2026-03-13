@@ -995,8 +995,6 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "scipy_version": charging.SCIPY_VERSION,
         "scipy_ok": bool(charging.HAS_SCIPY),
         "lp_ok": None,
-        "mode_share_by_service_class_is_legacy_mixed": True,
-        "mode_share_by_service_class_legacy_note": "legacy mode_share_by_service_class mixes pure eVTOL and multimodal EV_to_eVTOL",
         "vertiport_cap_triggered_count": 0.0,
         "vertiport_cap_excess_pax": 0.0,
         "vertiport_cap_rerouted_to_evtol": 0.0,
@@ -2006,7 +2004,9 @@ def main() -> None:
             "dn_end": results["convergence"].get("dn"),
             "dprice_start": dprice_hist[0] if dprice_hist else None,
             "dprice_smoothed_end": dprice_hist[-1] if dprice_hist else None,
+            "dprice_raw_end": results.get("diagnostics", {}).get("dprice_raw_end"),
             "dprice_end": results.get("diagnostics", {}).get("dprice_gate_end"),
+            "dprice_definition": "dprice_end uses gate/raw delta (same metric used in stop criterion); dprice_smoothed_end is post-MSA delta",
             "max_surcharge": max_surcharge,
             "peak_t": peak_prices_last.get("t"),
             "peak_prices": peak_prices_last.get("stations", {}),
@@ -2014,6 +2014,25 @@ def main() -> None:
             "objective_totals": results.get("diagnostics", {}).get("shared_power_lp", {}).get("objective_totals", {}),
             "dual_trace": results.get("diagnostics", {}).get("shared_power_lp", {}).get("dual_trace", {}),
         })
+
+        diagnostics_summary = {
+            "stop_reason": diagnostics_full.get("stop_reason"),
+            "iter_count": diagnostics_full.get("iter_count"),
+            "dx_end": diagnostics_full.get("dx_end"),
+            "dn_end": diagnostics_full.get("dn_end"),
+            "dprice_end": diagnostics_full.get("dprice_end"),
+            "dprice_raw_end": diagnostics_full.get("dprice_raw_end"),
+            "dprice_smoothed_end": diagnostics_full.get("dprice_smoothed_end"),
+            "dprice_definition": diagnostics_full.get("dprice_definition"),
+            "max_surcharge": diagnostics_full.get("max_surcharge"),
+            "peak_t": diagnostics_full.get("peak_t"),
+            "peak_prices": diagnostics_full.get("peak_prices"),
+            "converged_loose": diagnostics_full.get("converged_loose"),
+            "converged_strictly": diagnostics_full.get("converged_strictly"),
+            "shared_power_solver_used": results["diagnostics"].get("shared_power_solver_used"),
+            "delta_t": data.get("meta", {}).get("delta_t"),
+            "cbd_tau": cbd_tau_one,
+        }
 
         report = {
             "meta": {
@@ -2025,24 +2044,42 @@ def main() -> None:
             },
             "config_used": data.get("config", {}),
             "equilibrium": equilibrium,
+            "summary": {
+                "representative_od": diagnostics_full.get("representative_od"),
+                "case_label": diagnostics_full.get("case_label"),
+                "convergence": {
+                    "stop_reason": diagnostics_summary.get("stop_reason"),
+                    "converged_loose": diagnostics_summary.get("converged_loose"),
+                    "converged_strictly": diagnostics_summary.get("converged_strictly"),
+                    "dx_end": diagnostics_summary.get("dx_end"),
+                    "dn_end": diagnostics_summary.get("dn_end"),
+                    "dprice_end": diagnostics_summary.get("dprice_end"),
+                    "dprice_raw_end": diagnostics_summary.get("dprice_raw_end"),
+                    "dprice_smoothed_end": diagnostics_summary.get("dprice_smoothed_end"),
+                    "dprice_definition": diagnostics_summary.get("dprice_definition"),
+                },
+                "bottleneck_summary": diagnostics_full.get("bottleneck_summary"),
+                "power_binding_count": diagnostics_full.get("power_binding_count"),
+                "max_surcharge": diagnostics_summary.get("max_surcharge"),
+            },
             "surcharge_power": results["surcharge_power"],
             "surcharge_power_uncapped": results.get("surcharge_power_uncapped", {}),
-            "diagnostics": diagnostics_full if output_full_json else {
-                "stop_reason": diagnostics_full.get("stop_reason"),
-                "iter_count": diagnostics_full.get("iter_count"),
-                "dx_end": diagnostics_full.get("dx_end"),
-                "dn_end": diagnostics_full.get("dn_end"),
-                "dprice_end": diagnostics_full.get("dprice_end"),
-                "dprice_raw_end": diagnostics_full.get("dprice_raw_end"),
-                "max_surcharge": diagnostics_full.get("max_surcharge"),
-                "peak_t": diagnostics_full.get("peak_t"),
-                "peak_prices": diagnostics_full.get("peak_prices"),
-            },
+            "diagnostics": diagnostics_summary,
             "SelfAudit": results.get("SelfAudit", {}),
         }
-        report["diagnostics"].setdefault("cbd_tau", cbd_tau_one)
-        report["diagnostics"]["shared_power_solver_used"] = results["diagnostics"].get("shared_power_solver_used")
-        report["diagnostics"]["delta_t"] = data.get("meta", {}).get("delta_t")
+
+        if output_full_json:
+            report["diagnostics_detail"] = diagnostics_full
+            report["diagnostics_station_detail"] = {
+                "station_sets": diagnostics_full.get("station_sets", {}),
+                "power_tightness": diagnostics_full.get("power_tightness", {}),
+                "vt_departure_waits": diagnostics_full.get("vt_departure_waits", {}),
+                "vt_departure_flow_by_class": diagnostics_full.get("vt_departure_flow_by_class", {}),
+                "terminal_soc_by_station": diagnostics_full.get("terminal_soc_by_station", {}),
+                "storage_energy_totals_by_station": diagnostics_full.get("storage_energy_totals_by_station", {}),
+                "storage_model_status_by_station": diagnostics_full.get("storage_model_status_by_station", {}),
+            }
+
         report["diagnostics"]["surcharge_kappa"] = data.get("config", {}).get("surcharge_kappa")
         report["diagnostics"]["shadow_price_scale"] = data.get("config", {}).get("shadow_price_scale")
         report["diagnostics"]["surcharge_beta"] = data.get("config", {}).get("surcharge_beta")

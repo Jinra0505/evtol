@@ -32,11 +32,15 @@ class LPFailed(RuntimeError):
 
 
 def _hybrid_station_list(data: Dict[str, Any]) -> list[str]:
-    """Return stations that are modeled in shared-power / storage subproblems."""
+    """Return stations modeled in VT/shared-power subproblems.
+
+    This model requires ``sets.hybrid_stations`` to be explicitly provided.
+    No fallback to ``sets.stations`` is allowed for VT semantics.
+    """
     hs = data.get("sets", {}).get("hybrid_stations")
-    if isinstance(hs, list) and hs:
-        return [str(x) for x in hs]
-    return [str(x) for x in data.get("sets", {}).get("stations", [])]
+    if not isinstance(hs, list) or not hs:
+        raise ValueError("Missing required key path: sets.hybrid_stations for VT/shared-power modeling")
+    return [str(x) for x in hs]
 
 
 
