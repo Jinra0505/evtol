@@ -105,22 +105,25 @@ def _validate_basic_shapes(data: Dict[str, Any]) -> None:
 
 
 def _require_hybrid_param_complete(params: Dict[str, Any], hybrid_stations: Set[str], key: str, times: List[int] | None = None) -> None:
+    """Validate that a VT/hybrid-only parameter block is defined exactly on hybrid stations."""
     mapping = params.get(key, {})
+    if not isinstance(mapping, dict):
+        raise ValueError(f"Invalid field: parameters.{key} must be a dict keyed by hybrid station")
     kset = set(str(k) for k in mapping.keys())
     missing = sorted(hybrid_stations - kset)
     extra = sorted(kset - hybrid_stations)
     if missing:
-        raise ValueError(f"{key} missing hybrid stations: {missing}")
+        raise ValueError(f"Invalid field: parameters.{key} missing hybrid stations {missing}")
     if extra:
-        raise ValueError(f"{key} contains non-hybrid stations: {extra}")
+        raise ValueError(f"Invalid field: parameters.{key} contains non-hybrid stations {extra}")
     if times is not None:
         for s in hybrid_stations:
             tmap = mapping.get(s, {})
             if not isinstance(tmap, dict):
-                raise ValueError(f"{key}.{s} must be a dict by time")
+                raise ValueError(f"Invalid field: parameters.{key}.{s} must be a dict keyed by time")
             miss_t = [t for t in times if t not in tmap]
             if miss_t:
-                raise ValueError(f"{key}.{s} missing time keys: {miss_t[:5]}")
+                raise ValueError(f"Invalid field: parameters.{key}.{s} missing time keys {miss_t[:5]}")
 
 
 def _validate_station_facility_consistency(data: Dict[str, Any]) -> None:
@@ -135,9 +138,15 @@ def _validate_station_facility_consistency(data: Dict[str, Any]) -> None:
     if not hybrid_stations:
         raise ValueError("sets.hybrid_stations must be non-empty")
     if not hybrid_stations.issubset(ev_stations):
-        raise ValueError("Invalid station sets: hybrid_stations must be subset of ev_stations")
+        bad = sorted(hybrid_stations - ev_stations)
+        raise ValueError(f"Invalid station sets: sets.hybrid_stations must be subset of sets.ev_stations; offending stations={bad}")
     if stations and stations != ev_stations:
-        raise ValueError("Invalid station sets: sets.stations must equal sets.ev_stations in EV-only/Hybrid mode")
+        extra = sorted(stations - ev_stations)
+        missing = sorted(ev_stations - stations)
+        raise ValueError(
+            "Invalid station sets: sets.stations must equal sets.ev_stations in EV-only/Hybrid mode; "
+            f"extra_in_stations={extra}, missing_from_stations={missing}"
+        )
     if params.get("vertiports") is not None:
         raise ValueError("Do not provide parameters.vertiports; use sets.hybrid_stations only")
 
@@ -157,6 +166,8 @@ def _validate_station_facility_consistency(data: Dict[str, Any]) -> None:
     _require_hybrid_param_complete(params, hybrid_stations, "vertiport_cap_pax", times)
     _require_hybrid_param_complete(params, hybrid_stations, "vt_departure_capacity_total", times)
     _require_hybrid_param_complete(params, hybrid_stations, "vt_departure_capacity_fast", times)
+    if params.get("vt_departure_capacity") is not None:
+        _require_hybrid_param_complete(params, hybrid_stations, "vt_departure_capacity", times)
 
     itineraries = data.get("itineraries", []) if isinstance(data.get("itineraries"), list) else []
     for it in itineraries:
@@ -175,10 +186,14 @@ def _validate_station_facility_consistency(data: Dict[str, Any]) -> None:
         if is_evtol_itinerary(it) or mode.startswith("ev_to_evtol"):
             dep = str(it.get("dep_station")) if it.get("dep_station") is not None else None
             if dep is None or dep not in hybrid_stations:
-                raise ValueError(f"Itinerary {it_id}: dep_station must be in hybrid_stations")
+                raise ValueError(
+                    f"Invalid itinerary field: itineraries[{it_id}].dep_station={dep} must belong to sets.hybrid_stations"
+                )
             arr = str(it.get("arr_station")) if it.get("arr_station") is not None else None
             if arr is not None and arr not in hybrid_stations:
-                raise ValueError(f"Itinerary {it_id}: arr_station must be in hybrid_stations")
+                raise ValueError(
+                    f"Invalid itinerary field: itineraries[{it_id}].arr_station={arr} must belong to sets.hybrid_stations"
+                )
 
 
 def load_data(data_path: str, schema_path: str) -> Dict[str, Any]:

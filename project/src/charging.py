@@ -32,6 +32,7 @@ class LPFailed(RuntimeError):
 
 
 def _hybrid_station_list(data: Dict[str, Any]) -> list[str]:
+    """Return stations that are modeled in shared-power / storage subproblems."""
     hs = data.get("sets", {}).get("hybrid_stations")
     if isinstance(hs, list) and hs:
         return [str(x) for x in hs]
@@ -648,6 +649,11 @@ def solve_shared_power_inventory_lp(
     Dict[str, Dict[int, float]],
     Dict[str, float],
 ]:
+    """Solve shared station-power and storage inventory on hybrid stations only.
+
+    Inputs are zero-filled onto the hybrid set so that stations with zero current
+    demand remain explicitly modeled (important for terminal SOC accounting).
+    """
     times = data["sets"]["time"]
     stations = set(_hybrid_station_list(data))
     storage_params = data.get("parameters", {}).get("vertiport_storage", {})

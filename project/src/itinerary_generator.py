@@ -13,6 +13,12 @@ def generate_itineraries(
     ev_station_waits: Dict[str, Dict[int, float]],
     config: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
+    """Experimental placeholder itinerary generator.
+
+    Current production flow uses input itineraries from case files.
+    This function intentionally returns an empty list unless explicitly enabled,
+    and remains a scaffold for future generator implementations.
+    """
     if not config.get("use_generator", False):
         return []
     # Placeholder for V1+ MILP generation (not activated in toy data).

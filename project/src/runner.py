@@ -170,6 +170,13 @@ def _select_peak_t(data: Dict[str, Any], times: List[int], config: Dict[str, Any
 
 
 def _convergence_flags(dx: float, dn: float, dprice: float, residuals: Dict[str, float], tol: float, strict: bool) -> Dict[str, Any]:
+    """Evaluate loose/strict convergence gates.
+
+    Notes:
+    - ``dprice`` must be the same price metric used by stop-gating logic.
+    - In this implementation we use the raw (pre-MSA) surcharge delta for gating,
+      exposed as ``dprice_gate_end`` in diagnostics/metrics.
+    """
     strict_tol = max(1.0e-6, 0.5 * tol)
     loose_ok = max(dx, dn, dprice) <= tol
     strict_metric_ok = max(dx, dn, dprice) <= strict_tol
@@ -302,7 +309,7 @@ def self_audit(results: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any
     tol = float(diagnostics.get("tol", config.get("tol", 0.0)) or 0.0)
     dx_end = diagnostics.get("dx_end", results.get("convergence", {}).get("dx"))
     dn_end = diagnostics.get("dn_end", results.get("convergence", {}).get("dn"))
-    dprice_end = diagnostics.get("dprice_end", results.get("convergence", {}).get("dprice"))
+    dprice_end = diagnostics.get("dprice_gate_end", results.get("convergence", {}).get("dprice_gate"))
     converged_loose = bool(diagnostics.get("converged_loose", False))
     converged_strictly = bool(diagnostics.get("converged_strictly", False))
     if stop_reason != "patience":
@@ -905,7 +912,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     g_series = compute_g(n_series, data["parameters"]["mfd"])
     energy_surcharge = {s: {t: 0.0 for t in times} for s in power_stations}
     vt_service_prob = {s: {t: 1.0 for t in times} for s in power_stations}
-    ev_service_prob = {s: {t: 1.0 for t in times} for s in power_stations}
+    ev_service_prob = {s: {t: 1.0 for t in times} for s in ev_stations}
     min_iters = int(config.get("min_iters", 10))
     patience = int(config.get("patience", 5))
     stop_reason = "max_iters"
@@ -956,6 +963,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "runner_file": str(Path(__file__).resolve()),
             "charging_file": str(Path(charging.__file__).resolve()),
             "sys_path_head": list(sys.path[:5]),
+        },
+        "station_sets": {
+            "ev_stations": list(ev_stations),
+            "hybrid_stations": list(hybrid_stations),
         },
         "peak_t_selection_rule": peak_t_rule,
         "peak_t_total_demand": peak_t_total_demand,
@@ -1181,7 +1192,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         x_new = aggregate_arc_flows(itineraries, flows, times)
         u_new = aggregate_ev_station_utilization(itineraries, flows, times)
         x_new = _fill_missing(x_new, arcs, times)
-        u_new = _fill_missing(u_new, stations, times)
+        u_new = _fill_missing(u_new, ev_stations, times)
 
         dx_abs = max(abs(x_new[a][t] - arc_flows[a][t]) for a in arcs for t in times)
         max_flow = max(
@@ -1193,7 +1204,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         for a in arcs:
             for t in times:
                 arc_flows[a][t] = (1.0 - phi) * arc_flows[a][t] + phi * x_new[a][t]
-        for s in power_stations:
+        for s in ev_stations:
             for t in times:
                 utilization[s][t] = (1.0 - phi) * utilization[s][t] + phi * u_new[s][t]
         inflow_total, outflow_total = boundary_flows(
@@ -1241,9 +1252,6 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             shared_power_residuals,
             shared_power_lp_diag,
         ) = charging.solve_shared_power_inventory_lp(data, e_dep, ev_energy_kwh)
-        for s in power_stations:
-            B_vt_lp.setdefault(s, {t: 0.0 for t in times})
-            P_vt_lp.setdefault(s, {t: 0.0 for t in times})
         diagnostics["shared_power_solver_used"] = charging.LAST_SHARED_POWER_SOLVER_USED
         runtime_diag = data.get("diagnostics_runtime", {})
         diagnostics["lp_ok"] = bool(runtime_diag.get("lp_ok", diagnostics["shared_power_solver_used"] == "highs"))
@@ -1716,12 +1724,17 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
     )
     g_used_by_time = {t: g_series[min(idx, len(g_series) - 1)] for idx, t in enumerate(times)}
     times_ext = list(times) + [times[-1] + 1] if times else []
-    B_vt_report: Dict[str, Dict[int, float]] = {}
+    B_vt_report: Dict[str, Dict[int, float | None]] = {}
+    storage_model_status_by_station: Dict[str, str] = {}
     for s in power_stations:
+        station_has_storage_path = bool((B_vt_lp or {}).get(s))
+        storage_model_status_by_station[s] = "active" if station_has_storage_path else "not_modeled_or_inactive"
         B_vt_report[s] = {}
         for idx, t_ext in enumerate(times_ext):
             if B_vt_lp is not None and s in B_vt_lp and t_ext in B_vt_lp[s]:
                 B_vt_report[s][t_ext] = float(B_vt_lp[s][t_ext])
+            elif not station_has_storage_path:
+                B_vt_report[s][t_ext] = None
             elif idx == len(times_ext) - 1 and len(times_ext) >= 2:
                 prev_t = times_ext[-2]
                 B_vt_report[s][t_ext] = float((B_vt_lp or {}).get(s, {}).get(prev_t, 0.0))
@@ -1751,17 +1764,21 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         b_cfg = storage_params.get(s, {})
         b_init = float(b_cfg.get("B_init", b_cfg.get("B_min", 0.0)))
         b_target = float(charging._terminal_soc_target(b_cfg, data.get("config", {}), s))
-        b_end = float((B_vt_lp or {}).get(s, {}).get(times[-1] + 1, (B_vt_lp or {}).get(s, {}).get(times[-1], 0.0)) if times else 0.0)
-        gap = b_end - b_target
+        b_end_raw = (B_vt_lp or {}).get(s, {}).get(times[-1] + 1, (B_vt_lp or {}).get(s, {}).get(times[-1])) if times else None
+        b_end = float(b_end_raw) if b_end_raw is not None else None
+        gap = (b_end - b_target) if b_end is not None else None
+        modeled = b_end is not None
         terminal_soc_by_station[s] = {
             "terminal_soc_policy": str(config.get("terminal_soc_policy", "at_least_init")),
+            "storage_model_status": storage_model_status_by_station[s],
+            "storage_modeled": modeled,
             "terminal_soc_target_kwh": b_target,
             "terminal_soc_actual_end_kwh": b_end,
             "terminal_soc_gap_kwh": gap,
-            "terminal_soc_binding": abs(gap) <= 1.0e-6,
-            "terminal_soc_above_target": b_end >= b_target - 1.0e-6,
+            "terminal_soc_binding": (abs(gap) <= 1.0e-6) if gap is not None else None,
+            "terminal_soc_above_target": (b_end >= b_target - 1.0e-6) if b_end is not None else None,
             "initial_soc_kwh": b_init,
-            "terminal_vs_init_gap_kwh": b_end - b_init,
+            "terminal_vs_init_gap_kwh": (b_end - b_init) if b_end is not None else None,
         }
         charge_kwh = 0.0
         discharge_kwh = 0.0
@@ -1777,6 +1794,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         }
     diagnostics["terminal_soc_by_station"] = terminal_soc_by_station
     diagnostics["storage_energy_totals_by_station"] = storage_energy_totals_by_station
+    diagnostics["storage_model_status_by_station"] = storage_model_status_by_station
     diagnostics["storage_soc_trajectory_kwh"] = B_vt_report
     diagnostics["storage_charge_power_kw"] = {s: {t: float((P_vt_lp or {}).get(s, {}).get(t, 0.0)) for t in times} for s in power_stations}
 
@@ -1817,7 +1835,14 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "power_violation": power_violation,
         },
         "residuals": residuals,
-        "convergence": {"dx": dx, "dn": dn, "dprice": dprice, "iterations": last_iteration},
+        "convergence": {
+            "dx": dx,
+            "dn": dn,
+            "dprice": dprice,
+            "dprice_raw": dprice_for_conv,
+            "dprice_gate": dprice_for_conv,
+            "iterations": last_iteration,
+        },
         "diagnostics": {
             **diagnostics,
             "stop_reason": stop_reason,
@@ -1841,8 +1866,10 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "tol": config.get("tol"),
             "dx_end": dx,
             "dn_end": dn,
-            "dprice_end": dprice,
-            "dprice_raw_end": diagnostics.get("dprice_raw_history", [dprice])[-1] if diagnostics.get("dprice_raw_history") else dprice,
+            "dprice_smoothed_end": dprice,
+            "dprice_raw_end": dprice_for_conv,
+            "dprice_gate_end": dprice_for_conv,
+            "dprice_end": dprice_for_conv,
             "converged_loose": conv_flags["converged_loose"],
             "converged_strictly": conv_flags["converged_strictly"],
             "audit_ok": False,
@@ -1978,7 +2005,8 @@ def main() -> None:
             "dx_end": results["convergence"].get("dx"),
             "dn_end": results["convergence"].get("dn"),
             "dprice_start": dprice_hist[0] if dprice_hist else None,
-            "dprice_end": dprice_hist[-1] if dprice_hist else None,
+            "dprice_smoothed_end": dprice_hist[-1] if dprice_hist else None,
+            "dprice_end": results.get("diagnostics", {}).get("dprice_gate_end"),
             "max_surcharge": max_surcharge,
             "peak_t": peak_prices_last.get("t"),
             "peak_prices": peak_prices_last.get("stations", {}),
