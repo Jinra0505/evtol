@@ -36,6 +36,7 @@ from .congestion import compute_road_times, compute_station_waits, compute_vt_de
 from .data_loader import load_data
 from .itinerary_generator import generate_itineraries
 from .mfd import boundary_flows, compute_g, update_accumulation
+from .consumer_metrics import build_consumer_output_bundle, apply_named_scenario, build_tce_scenarios
 
 
 
@@ -128,6 +129,13 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     cfg.setdefault("terminal_soc_target_kwh", None)
     cfg.setdefault("peak_t_selection_rule", "max_total_demand")
     cfg.setdefault("manual_peak_t", None)
+    cfg.setdefault("consumer_metrics_enabled", True)
+    cfg.setdefault("booking_recommendation_enabled", True)
+    cfg.setdefault("best_balanced_weight_time", 0.4)
+    cfg.setdefault("best_balanced_weight_fare", 0.3)
+    cfg.setdefault("best_balanced_weight_reliability", 0.3)
+    cfg.setdefault("common_lambda_override", None)
+    cfg.setdefault("report_consumer_itinerary_details", True)
     cfg.setdefault("case_label", "illustrative")
     return cfg
 
@@ -996,6 +1004,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "audit_raise": config.get("audit_raise"),
             "terminal_soc_policy": config.get("terminal_soc_policy"),
             "terminal_soc_target_kwh": config.get("terminal_soc_target_kwh"),
+            "common_lambda_override": config.get("common_lambda_override"),
         },
         "scipy_version": charging.SCIPY_VERSION,
         "scipy_ok": bool(charging.HAS_SCIPY),
@@ -1085,12 +1094,21 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             transfer_time_by_station=data.get("parameters", {}).get("transfer_time_by_station"),
             transfer_time_default=float(data.get("parameters", {}).get("transfer_time_default", 0.0)),
         )
+        lambda_input = data["parameters"].get("lambda", {})
+        lambda_override = config.get("common_lambda_override")
+        if lambda_override is not None:
+            lam_scalar = float(lambda_override)
+            groups_effective = set(lambda_input.keys()) | set(data["parameters"].get("VOT", {}).keys())
+            lambda_effective = {str(g): lam_scalar for g in groups_effective}
+        else:
+            lambda_effective = lambda_input
+
         flows, logit_details = logit_assignment(
             itineraries,
             costs,
             data["parameters"]["q"],
             data["parameters"]["VOT"],
-            data["parameters"]["lambda"],
+            lambda_effective,
             times,
             vt_service_prob=vt_service_prob,
             ev_service_prob=ev_service_prob,
@@ -1818,6 +1836,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
         "generalized_costs": logit_details.get("generalized_costs", {}),
         "generalized_costs_raw": logit_details.get("generalized_costs_raw", {}),
         "utilities": logit_details.get("utilities", {}),
+        "utility_breakdown": logit_details.get("utility_breakdown", {}),
         "d_vt_route": d_vt_route,
         "d_vt_dep": d_vt_dep,
         "e_dep": e_dep,
@@ -1941,6 +1960,14 @@ def _resolve_path(path: str, fallback: str) -> str:
     )
 
 
+def apply_named_scenario_entry(data: Dict[str, Any], scenario_name: str) -> Dict[str, Any]:
+    return apply_named_scenario(data, scenario_name)
+
+
+def build_tce_scenarios_entry(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return build_tce_scenarios(data)
+
+
 def main() -> None:
     import argparse
     import datetime
@@ -2020,6 +2047,23 @@ def main() -> None:
             "dual_trace": results.get("diagnostics", {}).get("shared_power_lp", {}).get("dual_trace", {}),
         })
 
+        consumer_bundle: Dict[str, Any] = {}
+        if bool(data.get("config", {}).get("consumer_metrics_enabled", True)):
+            consumer_bundle = build_consumer_output_bundle(
+                data=data,
+                config=data.get("config", {}),
+                itineraries=list(data.get("itineraries", [])),
+                times=list(data.get("sets", {}).get("time", [])),
+                groups=list(data.get("sets", {}).get("groups", [])),
+                costs=results.get("costs", {}),
+                logit_details={
+                    "utility_breakdown": results.get("utility_breakdown", {}),
+                },
+                flows=results.get("f", {}),
+                diagnostics=diagnostics_full,
+                output_full_json=bool(output_full_json),
+            )
+
         diagnostics_summary = {
             "stop_reason": diagnostics_full.get("stop_reason"),
             "iter_count": diagnostics_full.get("iter_count"),
@@ -2071,6 +2115,11 @@ def main() -> None:
             "surcharge_power_uncapped": results.get("surcharge_power_uncapped", {}),
             "diagnostics": diagnostics_summary,
             "SelfAudit": results.get("SelfAudit", {}),
+            "consumer_metrics": consumer_bundle.get("consumer_metrics", {}),
+            "service_summary": consumer_bundle.get("service_summary", {}),
+            "platform_recommendations": consumer_bundle.get("platform_recommendations", {}),
+            "tce_summary": consumer_bundle.get("tce_summary", {}),
+            "parameter_registry": consumer_bundle.get("parameter_registry", {}),
         }
 
         if output_full_json:
