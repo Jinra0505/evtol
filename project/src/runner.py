@@ -130,7 +130,7 @@ def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     cfg.setdefault("peak_t_selection_rule", "max_total_demand")
     cfg.setdefault("manual_peak_t", None)
     cfg.setdefault("consumer_metrics_enabled", True)
-    cfg.setdefault("booking_recommendation_enabled", True)
+    cfg.setdefault("booking_recommendation_enabled", False)
     cfg.setdefault("best_balanced_weight_time", 0.4)
     cfg.setdefault("best_balanced_weight_fare", 0.3)
     cfg.setdefault("best_balanced_weight_reliability", 0.3)
@@ -1005,6 +1005,7 @@ def run_equilibrium(data: Dict[str, Any], overrides: Dict[str, Any] | None = Non
             "terminal_soc_policy": config.get("terminal_soc_policy"),
             "terminal_soc_target_kwh": config.get("terminal_soc_target_kwh"),
             "common_lambda_override": config.get("common_lambda_override"),
+            "booking_recommendation_enabled": config.get("booking_recommendation_enabled"),
         },
         "scipy_version": charging.SCIPY_VERSION,
         "scipy_ok": bool(charging.HAS_SCIPY),
@@ -2120,6 +2121,12 @@ def main() -> None:
             "platform_recommendations": consumer_bundle.get("platform_recommendations", {}),
             "tce_summary": consumer_bundle.get("tce_summary", {}),
             "parameter_registry": consumer_bundle.get("parameter_registry", {}),
+            "behavior_summary": consumer_bundle.get("behavior_summary", {}),
+            "group_mode_results": consumer_bundle.get("group_mode_results", {}),
+            "group_cost_decomposition": consumer_bundle.get("group_cost_decomposition", {}),
+            "group_time_decomposition": consumer_bundle.get("group_time_decomposition", {}),
+            "group_monetary_decomposition": consumer_bundle.get("group_monetary_decomposition", {}),
+            "vot_mechanism_summary": consumer_bundle.get("vot_mechanism_summary", {}),
         }
 
         if output_full_json:
